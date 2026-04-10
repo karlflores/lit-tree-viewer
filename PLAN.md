@@ -350,3 +350,10 @@ func filterRelationshipsAt(rels []Relationship, chapter int) []Relationship {
 // Explicit error returns, no panics in business logic
 func buildGraphSnapshot(db *DB, seriesID string, chapter int) (GraphSnapshot, error) { ... }
 ```
+
+## Other notes: 
+* I want to make the edit part of the application a sort of visual way of "coding" the declarative definitions. We should be able to convert between the two AND visually changing the graphs in the editor should change the declarations as well. This should be a good way to visually coding and going between both
+* We need to implement a colour picker for the edges as well as a way to pick what type of edge we want to use 
+* Need to double check the language definition. 
+* At some point we would need to do some kind of user authentication -- need to look at providers SSO would be ideal and easiest tbh
+* Add session data and persistence. Maybe also some sort of cache (redis?)
