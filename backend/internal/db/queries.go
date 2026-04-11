@@ -17,7 +17,7 @@ var ErrNotFound = errors.New("not found")
 // GetAllSeries returns every series, ordered by title.
 func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, title, media_type, unit_label, total_units
+		SELECT id, title, media_type, unit_label, total_units, author, group_type
 		FROM series
 		ORDER BY title
 	`)
@@ -29,7 +29,7 @@ func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, err
 	var results []domain.Series
 	for rows.Next() {
 		var s domain.Series
-		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType); err != nil {
 			return nil, fmt.Errorf("scanning series row: %w", err)
 		}
 		results = append(results, s)
@@ -41,10 +41,10 @@ func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, err
 func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domain.Series, error) {
 	var s domain.Series
 	err := pool.QueryRow(ctx, `
-		SELECT id, title, media_type, unit_label, total_units
+		SELECT id, title, media_type, unit_label, total_units, author, group_type
 		FROM series
 		WHERE id = $1
-	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits)
+	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Series{}, ErrNotFound

@@ -45,14 +45,17 @@ func TestMain(m *testing.M) {
 // All IDs use the ff…ff prefix to avoid colliding with seed data.
 //
 // Characters:
-//   charA  introduced_at=1  (present from the start)
+//   charA  introduced_at=1  (present from the start; renamed at unit 3)
 //   charB  introduced_at=1  (present from the start)
 //   charC  introduced_at=5  (appears mid-way)
 //
-// Relationships (all within the test series):
+// Relationships (label is canonical; kind retained for legacy column):
 //   relPerm   charA ↔ charB  ally    introduced=1  ended=nil  (always present)
 //   relEnds   charA → charB  rival   introduced=1  ended=4    (gone by unit 5)
 //   relLate   charB ↔ charC  family  introduced=5  ended=nil  (appears at unit 5)
+//
+// Renames:
+//   charA renamed to "Char A Renamed" at unit 3
 //
 // Expected counts:
 //   unit 1  →  chars: 2 (A,B)    rels: 2 (perm, ends; ended_at=4 >= 1)
@@ -84,16 +87,21 @@ func insertFixtures(ctx context.Context, pool *pgxpool.Pool) {
 	`, charAID, charBID, charCID, testSeriesID)
 
 	mustExec(ctx, pool, `
-		INSERT INTO relationships (series_id, from_id, to_id, kind, directed, introduced_at, ended_at)
+		INSERT INTO relationships (series_id, from_id, to_id, kind, label, directed, introduced_at, ended_at)
 		VALUES
-		  ($1, $2, $3, 'ally',   false, 1, NULL),
-		  ($1, $2, $3, 'rival',  true,  1, 4),
-		  ($1, $3, $4, 'family', false, 5, NULL)
+		  ($1, $2, $3, 'ally',   'ally',   false, 1, NULL),
+		  ($1, $2, $3, 'rival',  'rival',  true,  1, 4),
+		  ($1, $3, $4, 'family', 'family', false, 5, NULL)
 	`, testSeriesID, charAID, charBID, charCID)
+
+	mustExec(ctx, pool, `
+		INSERT INTO character_renames (character_id, series_id, name, introduced_at)
+		VALUES ($1, $2, 'Char A Renamed', 3)
+	`, charAID, testSeriesID)
 }
 
 func deleteFixtures(ctx context.Context, pool *pgxpool.Pool) {
-	// Cascade handles characters and relationships automatically.
+	// Cascade handles characters, relationships, and character_renames automatically.
 	mustExec(ctx, pool, `DELETE FROM series WHERE id = $1`, testSeriesID)
 }
 
@@ -171,6 +179,10 @@ func TestGetSeriesByID_Found(t *testing.T) {
 	if s.UnitLabel != "Chapter" {
 		t.Errorf("unitLabel: want Chapter, got %s", s.UnitLabel)
 	}
+	// author and group_type are NULL for manually-inserted test series
+	if s.Author != nil {
+		t.Errorf("author: want nil for test series, got %v", s.Author)
+	}
 }
 
 func TestGetSeriesByID_NotFound(t *testing.T) {
@@ -241,6 +253,36 @@ func TestGetCharactersAt_WrongSeries_ReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestGetCharactersAt_ReturnsInitialNameBeforeRename(t *testing.T) {
+	ctx := context.Background()
+	// Char A is renamed at unit 3; at unit 2 the original name should be returned.
+	chars, err := GetCharactersAt(ctx, testPool, testSeriesID, 2)
+	if err != nil {
+		t.Fatalf("GetCharactersAt: %v", err)
+	}
+	if countByName(chars, "Char A") != 1 {
+		t.Errorf("expected original name 'Char A' before rename at unit 2; got %v", chars)
+	}
+	if countByName(chars, "Char A Renamed") != 0 {
+		t.Error("renamed name should not appear before rename block")
+	}
+}
+
+func TestGetCharactersAt_ReturnsRenamedNameAfterRename(t *testing.T) {
+	ctx := context.Background()
+	// Char A is renamed to "Char A Renamed" at unit 3.
+	chars, err := GetCharactersAt(ctx, testPool, testSeriesID, 3)
+	if err != nil {
+		t.Fatalf("GetCharactersAt: %v", err)
+	}
+	if countByName(chars, "Char A Renamed") != 1 {
+		t.Errorf("expected renamed name at unit 3; got %v", chars)
+	}
+	if countByName(chars, "Char A") != 0 {
+		t.Error("original name should not appear after rename")
+	}
+}
+
 // ── GetRelationshipsAt ────────────────────────────────────────────────────────
 
 func TestGetRelationshipsAt_Unit1(t *testing.T) {
@@ -278,8 +320,21 @@ func TestGetRelationshipsAt_Unit5_EndedRelationshipExcluded(t *testing.T) {
 		t.Fatalf("want 2 relationships at unit 5, got %d", len(rels))
 	}
 	for _, r := range rels {
-		if r.Kind == domain.KindRival {
+		if r.Label == "rival" {
 			t.Error("rival relationship (ended_at=4) should not appear at unit 5")
+		}
+	}
+}
+
+func TestGetRelationshipsAt_LabelIsCanonical(t *testing.T) {
+	ctx := context.Background()
+	rels, err := GetRelationshipsAt(ctx, testPool, testSeriesID, 1)
+	if err != nil {
+		t.Fatalf("GetRelationshipsAt: %v", err)
+	}
+	for _, r := range rels {
+		if r.Label == "" {
+			t.Errorf("relationship %s has empty label; label is required", r.ID)
 		}
 	}
 }
@@ -328,6 +383,50 @@ func TestGetGraphSnapshot_ComposesCorrectly(t *testing.T) {
 	}
 	if len(snap.Relationships) != 2 {
 		t.Errorf("want 2 relationships at unit 5, got %d", len(snap.Relationships))
+	}
+}
+
+func TestGetGraphSnapshot_PopulatesRenames(t *testing.T) {
+	ctx := context.Background()
+	// At unit 5, charA has been renamed (rename at unit 3).
+	snap, err := GetGraphSnapshot(ctx, testPool, testSeriesID, 5)
+	if err != nil {
+		t.Fatalf("GetGraphSnapshot: %v", err)
+	}
+
+	var charA *domain.Character
+	for i := range snap.Characters {
+		if snap.Characters[i].ID == charAID {
+			charA = &snap.Characters[i]
+			break
+		}
+	}
+	if charA == nil {
+		t.Fatal("charA not found in snapshot")
+	}
+	if len(charA.Renames) != 1 {
+		t.Fatalf("want 1 rename on charA, got %d", len(charA.Renames))
+	}
+	if charA.Renames[0].Name != "Char A Renamed" {
+		t.Errorf("rename name: want 'Char A Renamed', got %q", charA.Renames[0].Name)
+	}
+	if charA.Renames[0].IntroducedAt != 3 {
+		t.Errorf("rename introducedAt: want 3, got %d", charA.Renames[0].IntroducedAt)
+	}
+}
+
+func TestGetGraphSnapshot_RenamesAbsentBeforeRenameBlock(t *testing.T) {
+	ctx := context.Background()
+	// At unit 2, charA's rename (unit 3) has not happened yet.
+	snap, err := GetGraphSnapshot(ctx, testPool, testSeriesID, 2)
+	if err != nil {
+		t.Fatalf("GetGraphSnapshot: %v", err)
+	}
+
+	for _, c := range snap.Characters {
+		if c.ID == charAID && len(c.Renames) != 0 {
+			t.Errorf("want no renames on charA at unit 2, got %d", len(c.Renames))
+		}
 	}
 }
 
