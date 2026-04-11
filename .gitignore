@@ -8,6 +8,12 @@ frontend/dist/
 frontend/.env*
 !frontend/.env.example
 
+# ltg-langserver
+ltg-langserver/node_modules/
+ltg-langserver/target/
+ltg-langserver/.env*
+!ltg-langserver/.env.example
+
 # OS
 .DS_Store
 Thumbs.db
