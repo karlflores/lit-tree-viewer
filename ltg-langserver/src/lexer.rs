@@ -16,7 +16,7 @@ pub type Span = Range<usize>;
 #[derive(Logos, Debug, Clone, PartialEq)]
 #[logos(error = LexRawError)]
 #[logos(skip r"[ ]+")] // horizontal whitespace within a line
-#[logos(skip r"#[^\n]*")] // `# …` line comments (not the newline itself)
+#[logos(skip(r"#[^\n]*", allow_greedy = true))] // `# …` line comments (not the newline itself)
 pub enum RawToken {
     // ── Structural keywords ───────────────────────────────────────────────
     #[token("metadata")] Metadata,

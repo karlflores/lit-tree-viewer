@@ -236,8 +236,8 @@ pub async fn serve_ws_session(socket: WebSocket) {
     let inbound = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_rx.next().await {
             let data: Vec<u8> = match msg {
-                Message::Text(t)   => t.into_bytes(),
-                Message::Binary(b) => b,
+                Message::Text(t)   => t.as_bytes().to_vec(),
+                Message::Binary(b) => b.to_vec(),
                 Message::Close(_)  => break,
                 _                  => continue, // ping/pong — ignore
             };
@@ -284,7 +284,7 @@ pub async fn serve_ws_session(socket: WebSocket) {
                 Ok(s)  => s,
                 Err(_) => break,
             };
-            if ws_tx.send(Message::Text(text)).await.is_err() { break; }
+            if ws_tx.send(Message::Text(text.into())).await.is_err() { break; }
         }
     });
 

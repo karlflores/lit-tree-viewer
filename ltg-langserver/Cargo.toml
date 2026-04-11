@@ -8,14 +8,14 @@ name = "ltg-langserver"
 path = "src/main.rs"
 
 [dependencies]
-logos      = "0.14"
-chumsky    = "0.9"
-tower-lsp  = "0.20"
+logos      = "0.16"
+chumsky    = "0.9"       # latest stable; 1.0.0-alpha.* is pre-release with breaking API
+tower-lsp  = "0.20"      # latest stable
 tokio      = { version = "1", features = ["full"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-dashmap    = "5"
-axum       = { version = "0.7", features = ["ws"] }
+dashmap    = "6"
+axum       = { version = "0.8", features = ["ws"] }
 futures    = "0.3"
 
 [dev-dependencies]

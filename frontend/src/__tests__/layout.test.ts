@@ -24,9 +24,9 @@ describe('applyDagreLayout', () => {
     const nodes = [makeNode('a')]
     const result = applyDagreLayout(nodes, [])
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('a')
-    expect(typeof result[0].position.x).toBe('number')
-    expect(typeof result[0].position.y).toBe('number')
+    expect(result[0]!.id).toBe('a')
+    expect(typeof result[0]!.position.x).toBe('number')
+    expect(typeof result[0]!.position.y).toBe('number')
   })
 
   it('preserves all node ids', () => {
@@ -41,8 +41,8 @@ describe('applyDagreLayout', () => {
     const nodes = [makeNode('a'), makeNode('b')]
     const original = nodes.map(n => ({ ...n, position: { ...n.position } }))
     applyDagreLayout(nodes, [makeEdge('e1', 'a', 'b')])
-    expect(nodes[0].position).toEqual(original[0].position)
-    expect(nodes[1].position).toEqual(original[1].position)
+    expect(nodes[0]!.position).toEqual(original[0]!.position)
+    expect(nodes[1]!.position).toEqual(original[1]!.position)
   })
 
   it('places the directed edge source above its target (lower y)', () => {
