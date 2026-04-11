@@ -32,7 +32,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	router := api.NewRouter(pool)
+	router := api.NewRouter(db.NewStore(pool))
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,
