@@ -1302,15 +1302,15 @@ describe(catherine, "Wild and passionate; torn between social ambition and her l
 All parsing, type checking, and compilation lives here.  The frontend never sees an AST.
 
 **Core pipeline (`ltg-langserver/src/`)**
-- [ ] `lexer.rs` — `logos`-derived token enum; handles indentation depth, quoted strings,
+- [x] `lexer.rs` — `logos`-derived token enum; handles indentation depth, quoted strings,
       identifiers, `->` / `--` operators; keywords: `metadata`, `link`, `unlink`,
       `deceased`, `new`, `group`, `set`, `actor`, `init`; line tracking for LSP positions
-- [ ] `parser.rs` — `chumsky` combinator parser; produces `Program` or `Vec<ParseError>`
+- [x] `parser.rs` — `chumsky` combinator parser; produces `Program` or `Vec<ParseError>`
       with source spans; error recovery allows partial ASTs so diagnostics keep working
       mid-edit; parses `metadata` directives, `set block:` with optional `= "<display>"`,
       `set group:` / `set colour:`, `new <type>:` blocks (optional label, empty body),
       and `group "<label>":` containers
-- [ ] `checker.rs` — semantic analyser; enforces `metadata title:` and `metadata media:`
+- [x] `checker.rs` — semantic analyser; enforces `metadata title:` and `metadata media:`
       presence and uniqueness; validates `media` value against `book | show | film`;
       validates `set block:` declared before `init:` and that all `new` statements match
       it; rejects `actor` declarations at the top level (`TopLevelActor`); simulates
@@ -1322,18 +1322,22 @@ All parsing, type checking, and compilation lives here.  The frontend never sees
       as labels or actor identifiers; validates `set colour:` hex values; emits
       `UnusedColourOverride` warnings for overrides with no matching `link`; rejects
       nested groups; enforces 4-space indentation (delegates to lexer)
-- [ ] `compiler.rs` — for each `rename` statement: appends a `CompiledRename` to the
-      character's `renames` list and auto-adds the previous display name to `aliases`
-- [ ] `compiler.rs` — validated `Program` → `CompiledGraph`; resolves `unitLabel` via
+- [x] `compiler.rs` — for each `rename` statement: appends a `CompiledRename` to the
+      character's `renames` list and auto-adds the new display name to `aliases`
+- [x] `compiler.rs` — validated `Program` → `CompiledGraph`; resolves `unitLabel` via
       `BlockTypeDecl::unit_label()`; assigns sequential block indices; builds `blocks`
       array (one `CompiledBlock` per block including `init:` and empty blocks, with
       `group_label` set for blocks inside a `group` container); computes the final
       `colours` map; pure function
-- [ ] `colours.rs` — palette hash: maps a label string to a hex colour from a curated
-      dark-background-friendly palette; deterministic, no state
-- [ ] `pipeline.rs` — chains lex → parse → check → compile; returns `PipelineResult`
-      with diagnostics and optional `CompiledGraph`
-- [ ] Unit tests for each module (`cargo test`)
+- [x] `colours` — FNV-1a palette hash implemented inside `compiler.rs`: maps a label
+      string to a hex colour from a 12-colour Tailwind 400-level palette; deterministic,
+      no state; overridden unconditionally by `set colour:` directives
+- [x] `pipeline.rs` — chains lex → parse → check → compile; returns `PipelineResult`
+      with diagnostics and optional `CompiledGraph`; converts byte-offset spans to
+      0-based (line, character) positions; lex errors get codes `InvalidIndentation` /
+      `SyntaxError`; parse errors get `SyntaxError`; check errors use their spec code
+      strings; severity 1 = error, 2 = warning; compilation only runs when zero errors
+- [x] Unit tests for each module (`cargo test`) — 178 tests passing
 
 **LSP server (`ltg-langserver/src/lsp.rs`)**
 - [ ] `tower-lsp` `LanguageServer` trait implementation
