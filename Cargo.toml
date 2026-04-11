@@ -1,0 +1,3 @@
+[workspace]
+members = ["ltg-langserver"]
+resolver = "2"

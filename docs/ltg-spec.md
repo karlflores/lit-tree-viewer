@@ -1337,28 +1337,29 @@ All parsing, type checking, and compilation lives here.  The frontend never sees
       0-based (line, character) positions; lex errors get codes `InvalidIndentation` /
       `SyntaxError`; parse errors get `SyntaxError`; check errors use their spec code
       strings; severity 1 = error, 2 = warning; compilation only runs when zero errors
-- [x] Unit tests for each module (`cargo test`) — 178 tests passing
+- [x] Unit tests for each module (`cargo test`) — 208 tests passing
 
 **LSP server (`ltg-langserver/src/lsp.rs`)**
-- [ ] `tower-lsp` `LanguageServer` trait implementation
-- [ ] stdio transport — for VSCode extension and CLI
-- [ ] WebSocket transport (via `tokio-tungstenite`) — for browser; same handler, different
-      framing
-- [ ] Handle `initialize`, `textDocument/didOpen`, `textDocument/didChange`,
+- [x] `tower-lsp` `LanguageServer` trait implementation
+- [x] stdio transport — for VSCode extension and CLI
+- [x] WebSocket transport — `serve_ws_session()` in `lsp.rs`; Content-Length bridge to
+      tower-lsp; bare JSON frames for `monaco-languageclient`; exposed via `GET /ws`
+- [x] Handle `initialize`, `textDocument/didOpen`, `textDocument/didChange`,
       `textDocument/didClose` — run pipeline on every change, push `publishDiagnostics`
-- [ ] `workspace/executeCommand: ltg.compile` — run compiler, return `CompiledGraph` JSON
+- [x] `workspace/executeCommand: ltg.compile` — run compiler, return `CompiledGraph` JSON
       as the command result (used by the "Save" button)
 
 **HTTP companion (`ltg-langserver/src/http.rs`, `axum`)**
-- [ ] `POST /compile` — one-shot compile for the file-upload import flow
-- [ ] `GET /health`
+- [x] `POST /compile` — one-shot compile for the file-upload import flow
+- [x] `GET /health`
+- [x] `GET /ws` — LSP over WebSocket; per-connection Backend with Content-Length bridge
 
 **Infrastructure**
-- [ ] `ltg-langserver/` Cargo workspace member alongside `frontend/` and `backend/`
-- [ ] `Cargo.toml` with `logos`, `chumsky`, `tower-lsp`, `tokio`, `axum`,
-      `tokio-tungstenite`, `serde`, `serde_json`
-- [ ] Added to `compose.yaml` as a service (optional for dev — can run standalone)
-- [ ] `Dockerfile` using `rust:alpine` builder → scratch/distroless final image
+- [x] `ltg-langserver/` Cargo workspace member — root `Cargo.toml` with `members = ["ltg-langserver"]`
+- [x] `Cargo.toml` with `logos`, `chumsky`, `tower-lsp`, `tokio`, `axum`,
+      `tokio-tungstenite` (via axum ws), `serde`, `serde_json`, `dashmap`, `futures`
+- [x] Added to `compose.yaml` as a service — builds from `ltg-langserver/Dockerfile`, exposes port 4000
+- [x] `Dockerfile` — `rust:alpine` + `musl-dev` builder → `scratch` final image; fully static binary
 
 ---
 

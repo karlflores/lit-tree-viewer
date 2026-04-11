@@ -4,7 +4,8 @@ use crate::ast::*;
 
 // ── Compiled output types ─────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledSeries {
     pub title:       String,
     pub media_type:  MediaType,
@@ -17,7 +18,8 @@ pub struct CompiledSeries {
     pub group_type:  Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledRename {
     /// The new display name.
     pub name:          String,
@@ -25,7 +27,8 @@ pub struct CompiledRename {
     pub introduced_at: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledCharacter {
     /// The unquoted LTG identifier (e.g. `heathcliff`). Stable across renames.
     pub identifier:    String,
@@ -42,7 +45,8 @@ pub struct CompiledCharacter {
     pub died_at:       Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledRelationship {
     pub from_identifier: String,
     pub to_identifier:   String,
@@ -53,7 +57,8 @@ pub struct CompiledRelationship {
     pub ended_at:        Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledBlock {
     /// 1-based sequential index across the whole file (group boundaries are transparent).
     pub index:       usize,
@@ -63,7 +68,8 @@ pub struct CompiledBlock {
     pub group_label: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledGraph {
     pub series:        CompiledSeries,
     /// Characters in declaration order (init: actors first, then introduced in each block).

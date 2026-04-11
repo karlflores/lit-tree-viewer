@@ -8,7 +8,8 @@ pub type Spanned<T> = (T, Span);
 
 // ── Metadata ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MediaType {
     Book,
     Show,
