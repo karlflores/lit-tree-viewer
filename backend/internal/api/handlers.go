@@ -7,15 +7,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"lit-tree-viewer/internal/db"
 )
 
 // listSeries handles GET /series
-func listSeries(pool *pgxpool.Pool) gin.HandlerFunc {
+func listSeries(store Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		series, err := db.GetAllSeries(c.Request.Context(), pool)
+		series, err := store.GetAllSeries(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch series"})
 			return
@@ -25,7 +24,7 @@ func listSeries(pool *pgxpool.Pool) gin.HandlerFunc {
 }
 
 // getSeries handles GET /series/:id
-func getSeries(pool *pgxpool.Pool) gin.HandlerFunc {
+func getSeries(store Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := uuid.Parse(c.Param("id"))
 		if err != nil {
@@ -33,7 +32,7 @@ func getSeries(pool *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 
-		series, err := db.GetSeriesByID(c.Request.Context(), pool, id)
+		series, err := store.GetSeriesByID(c.Request.Context(), id)
 		if errors.Is(err, db.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
 			return
@@ -48,7 +47,7 @@ func getSeries(pool *pgxpool.Pool) gin.HandlerFunc {
 }
 
 // getGraphSnapshot handles GET /series/:id/graph?at=N
-func getGraphSnapshot(pool *pgxpool.Pool) gin.HandlerFunc {
+func getGraphSnapshot(store Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, err := uuid.Parse(c.Param("id"))
 		if err != nil {
@@ -63,7 +62,7 @@ func getGraphSnapshot(pool *pgxpool.Pool) gin.HandlerFunc {
 			return
 		}
 
-		snapshot, err := db.GetGraphSnapshot(c.Request.Context(), pool, id, atUnit)
+		snapshot, err := store.GetGraphSnapshot(c.Request.Context(), id, atUnit)
 		if errors.Is(err, db.ErrNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
 			return

@@ -2,19 +2,18 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func NewRouter(pool *pgxpool.Pool) *gin.Engine {
+func NewRouter(store Store) *gin.Engine {
 	r := gin.Default()
 
 	r.Use(corsMiddleware())
 
 	v1 := r.Group("/api")
 	{
-		v1.GET("/series", listSeries(pool))
-		v1.GET("/series/:id", getSeries(pool))
-		v1.GET("/series/:id/graph", getGraphSnapshot(pool))
+		v1.GET("/series", listSeries(store))
+		v1.GET("/series/:id", getSeries(store))
+		v1.GET("/series/:id/graph", getGraphSnapshot(store))
 	}
 
 	return r
