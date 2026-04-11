@@ -56,15 +56,30 @@ func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domai
 }
 
 // GetCharactersAt returns all characters introduced at or before atUnit.
-// Deceased characters are included — the client decides whether to grey them out.
+// The Name field contains the effective display name at atUnit — resolved
+// server-side from character_renames, falling back to the initial name.
+// Deceased characters are included; the client decides whether to grey them out.
 func GetCharactersAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, atUnit int) ([]domain.Character, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, series_id, name, aliases, description, image_url,
-		       introduced_at, died_at, ltg_identifier
-		FROM characters
-		WHERE series_id = $1
-		  AND introduced_at <= $2
-		ORDER BY introduced_at, name
+		SELECT
+		    c.id,
+		    c.series_id,
+		    COALESCE(
+		        (SELECT r.name FROM character_renames r
+		         WHERE r.character_id = c.id AND r.introduced_at <= $2
+		         ORDER BY r.introduced_at DESC LIMIT 1),
+		        c.name
+		    ) AS name,
+		    c.aliases,
+		    c.description,
+		    c.image_url,
+		    c.introduced_at,
+		    c.died_at,
+		    c.ltg_identifier
+		FROM characters c
+		WHERE c.series_id = $1
+		  AND c.introduced_at <= $2
+		ORDER BY c.introduced_at, c.name
 	`, seriesID, atUnit)
 	if err != nil {
 		return nil, fmt.Errorf("querying characters: %w", err)
@@ -84,6 +99,32 @@ func GetCharactersAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID
 		results = append(results, c)
 	}
 	return results, rows.Err()
+}
+
+// getRenamesAt returns all rename events up to atUnit, keyed by character UUID.
+// Used by GetGraphSnapshot to populate Character.Renames for the character panel.
+func getRenamesAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, atUnit int) (map[uuid.UUID][]domain.CharacterRename, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT character_id, name, introduced_at
+		FROM character_renames
+		WHERE series_id = $1 AND introduced_at <= $2
+		ORDER BY character_id, introduced_at
+	`, seriesID, atUnit)
+	if err != nil {
+		return nil, fmt.Errorf("querying character renames: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID][]domain.CharacterRename)
+	for rows.Next() {
+		var charID uuid.UUID
+		var r domain.CharacterRename
+		if err := rows.Scan(&charID, &r.Name, &r.IntroducedAt); err != nil {
+			return nil, fmt.Errorf("scanning rename row: %w", err)
+		}
+		result[charID] = append(result[charID], r)
+	}
+	return result, rows.Err()
 }
 
 // GetRelationshipsAt returns all relationships active at atUnit.
@@ -118,7 +159,7 @@ func GetRelationshipsAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.U
 }
 
 // GetGraphSnapshot composes a full graph at a given unit position.
-// This is a pure read — three queries, no transaction needed.
+// This is a pure read — four queries, no transaction needed.
 func GetGraphSnapshot(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error) {
 	series, err := GetSeriesByID(ctx, pool, seriesID)
 	if err != nil {
@@ -128,6 +169,16 @@ func GetGraphSnapshot(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUI
 	characters, err := GetCharactersAt(ctx, pool, seriesID, atUnit)
 	if err != nil {
 		return domain.GraphSnapshot{}, err
+	}
+
+	renames, err := getRenamesAt(ctx, pool, seriesID, atUnit)
+	if err != nil {
+		return domain.GraphSnapshot{}, err
+	}
+	for i := range characters {
+		if r, ok := renames[characters[i].ID]; ok {
+			characters[i].Renames = r
+		}
 	}
 
 	relationships, err := GetRelationshipsAt(ctx, pool, seriesID, atUnit)

@@ -27,28 +27,44 @@ const (
 )
 
 // Series is the top-level container for a graph.
+// Author and GroupType are populated only for LTG-imported series; nil for seed data.
 type Series struct {
 	ID         uuid.UUID `json:"id"`
 	Title      string    `json:"title"`
 	MediaType  MediaType `json:"mediaType"`
 	UnitLabel  string    `json:"unitLabel"`
 	TotalUnits int       `json:"totalUnits"`
+	Author     *string   `json:"author,omitempty"`    // from `metadata author:`
+	GroupType  *string   `json:"groupType,omitempty"` // from `set group:`
+}
+
+// CharacterRename records one temporal name change for a character.
+// The effective display name at block N is the most recent rename with
+// IntroducedAt <= N, falling back to Character.Name when none exists.
+type CharacterRename struct {
+	Name         string `json:"name"`
+	IntroducedAt int    `json:"introducedAt"`
 }
 
 // Character is a node in the graph.
+// Name is the initial name from the actor declaration — the identity anchor.
+// The graph API resolves the effective display name server-side and returns it
+// in Name; Renames carries the full history up to the queried unit so the
+// character panel can show previous names.
 // DiedAt is nil if the character is still alive or their fate is unknown.
 // LtgIdentifier is the identifier used in the source .ltg file; nil for
 // records not created via LTG import. Required for round-trip export fidelity.
 type Character struct {
-	ID            uuid.UUID `json:"id"`
-	SeriesID      uuid.UUID `json:"seriesId"`
-	Name          string    `json:"name"`
-	Aliases       []string  `json:"aliases"`
-	Description   *string   `json:"description"`
-	ImageURL      *string   `json:"imageUrl"`
-	IntroducedAt  int       `json:"introducedAt"`
-	DiedAt        *int      `json:"diedAt"`
-	LtgIdentifier *string   `json:"ltgIdentifier,omitempty"`
+	ID            uuid.UUID        `json:"id"`
+	SeriesID      uuid.UUID        `json:"seriesId"`
+	Name          string           `json:"name"`
+	Aliases       []string         `json:"aliases"`
+	Renames       []CharacterRename `json:"renames,omitempty"`
+	Description   *string          `json:"description"`
+	ImageURL      *string          `json:"imageUrl"`
+	IntroducedAt  int              `json:"introducedAt"`
+	DiedAt        *int             `json:"diedAt"`
+	LtgIdentifier *string          `json:"ltgIdentifier,omitempty"`
 }
 
 // Relationship is an edge in the graph.
