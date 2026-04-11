@@ -35,7 +35,7 @@ const toFlowNode = (
 })
 
 const toFlowEdge = (relationship: Relationship): Edge<RelationshipEdgeData> => {
-  const style = getEdgeStyle(relationship.kind)
+  const style = getEdgeStyle(relationship.kind, relationship.label)
   return {
     id: relationship.id,
     source: relationship.fromId,

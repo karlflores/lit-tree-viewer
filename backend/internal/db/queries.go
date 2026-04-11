@@ -59,7 +59,8 @@ func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domai
 // Deceased characters are included — the client decides whether to grey them out.
 func GetCharactersAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, atUnit int) ([]domain.Character, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, series_id, name, aliases, description, image_url, introduced_at, died_at
+		SELECT id, series_id, name, aliases, description, image_url,
+		       introduced_at, died_at, ltg_identifier
 		FROM characters
 		WHERE series_id = $1
 		  AND introduced_at <= $2
@@ -76,6 +77,7 @@ func GetCharactersAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID
 		if err := rows.Scan(
 			&c.ID, &c.SeriesID, &c.Name, &c.Aliases,
 			&c.Description, &c.ImageURL, &c.IntroducedAt, &c.DiedAt,
+			&c.LtgIdentifier,
 		); err != nil {
 			return nil, fmt.Errorf("scanning character row: %w", err)
 		}
@@ -103,6 +105,7 @@ func GetRelationshipsAt(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.U
 	var results []domain.Relationship
 	for rows.Next() {
 		var r domain.Relationship
+		// kind is nullable (nil for LTG-imported relationships); label is NOT NULL.
 		if err := rows.Scan(
 			&r.ID, &r.SeriesID, &r.FromID, &r.ToID,
 			&r.Kind, &r.Label, &r.Directed, &r.IntroducedAt, &r.EndedAt,

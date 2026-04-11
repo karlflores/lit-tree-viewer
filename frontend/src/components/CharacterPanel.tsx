@@ -75,7 +75,7 @@ const CharacterPanel = memo(({ character, relationships, allCharacters, series, 
             {relevant.map(r => {
               const otherId = r.fromId === character.id ? r.toId : r.fromId
               const other = charById.get(otherId)
-              const style = getEdgeStyle(r.kind)
+              const style = getEdgeStyle(r.kind, r.label)
               const arrow = r.directed
                 ? r.fromId === character.id ? '→' : '←'
                 : '↔'

@@ -22,35 +22,59 @@ the LitTree backend persists.
 
 | Term | Meaning |
 |---|---|
+| **metadata** | Series-level information (`title`, `media`, `author`) declared with the `metadata` keyword. Required fields are enforced by the compiler. Passes through to the `Series` record unchanged — the compiler does not act on it structurally. |
 | **actor** | A named character. Identified by an opaque identifier; displayed by their display name. |
-| **block** | A logical unit of time — chapter, episode, date, year. Numbered 1…N sequentially. `init:` is always block 1. |
-| **event** | A statement inside a block that adds/removes a relationship or changes an actor's state. |
-| **relationship** | A directed (`->`) or undirected (`--`) edge between two actors with a label. |
-| **kind** | The semantic category of a relationship (drives visual style). Inferred from the label. |
+| **block type** | The unit of time for a series — declared once with `set block:`. The identifier becomes the keyword used in `new` statements; the optional display label becomes `unitLabel` in the domain model. |
+| **block** | One unit of time. `init:` is always block 1. Each `new <type>:` is a subsequent block, numbered globally and sequentially from 1. |
+| **group** | An optional organisational container for blocks — e.g. a season holding episodes, or a volume holding chapters. Declared with `group "<label>":`. Purely structural; does not affect block numbering. |
+| **group type** | An optional name for the container level — declared with `set group:` (e.g. `season`, `volume`, `arc`). Used by the UI timeline scrubber. |
+| **event** | A statement inside a block that changes the graph: `link`, `unlink`, or `deceased`. |
+| **relationship** | A directed (`->`) or undirected (`--`) edge between two actors, identified by a free-form label. |
+| **label** | A free-form identifier naming a relationship (e.g. `siblings`, `blood_oath`, `reluctant_allies`). Inferred from position in the `link` statement — always the token between `link` and `(`. Stored verbatim; drives edge colour via a deterministic hash. Reserved keywords are illegal as labels. |
 
 ---
 
 ## File Structure
 
 ```
+# ── Required metadata ────────────────────────────────────────────────
+metadata title:  "<series title>"
+metadata media:  book | show | film
+
+# ── Optional metadata ────────────────────────────────────────────────
+metadata author: "<author name>"
+
+# ── Structural directives ────────────────────────────────────────────
+set block: <type>                    # required
+set block: <type> = "<display>"      # optional display label override
+set group: <type>                    # optional
+set colour: <label> = "<hex>"        # zero or more
+
+# ── Actors ──────────────────────────────────────────────────────────
 <top-level actor declarations>
 
+# ── Blocks ──────────────────────────────────────────────────────────
 init:
     <events>
 
-set block: "<name>"
+new <type>:                          # empty block — graph unchanged
+new <type>: "<label>"                # block with an optional display label
     <actor declarations>
     <events>
 
-set block: "<name>"
-    <actor declarations>
-    <events>
-...
+group "<label>":                     # optional organisational container
+    new <type>:
+        <actor declarations>
+        <events>
+    new <type>:                      # empty block inside a group
 ```
 
-Top-level actor declarations define characters that exist before the story begins (or
-whose exact introduction block is unknown). Actors can also be declared inside any block,
-in which case their `introducedAt` is the block's index.
+All `metadata` and `set block:` directives must appear before `init:`. The compiler
+enforces this; ordering between `metadata` and `set` directives is not prescribed.
+
+Blocks are numbered **globally and sequentially** starting from 1 (`init:` = block 1,
+first `new <type>:` = block 2, and so on). Groups are purely organisational — a block
+inside a group has the same sequential index it would have outside one.
 
 ---
 
@@ -62,6 +86,92 @@ in which case their `introducedAt` is the block's index.
 # This is a comment. Ignored by the compiler.
 ```
 
+### Metadata Directives
+
+Declare series-level information. `title` and `media` are required and must appear before
+`init:`. The compiler produces `MissingMetadata` if either is absent and `DuplicateMetadata`
+if either appears more than once.
+
+```
+metadata title:  "<series title>"
+metadata media:  book | show | film
+metadata author: "<author name>"     # optional
+```
+
+- `title` — the display name of the series. Stored as `Series.title`.
+- `media` — the medium. Constrained to `book`, `show`, or `film`; any other value is an
+  `InvalidMediaType` error. Stored as `Series.mediaType`.
+- `author` — optional. Stored for display; not part of the current domain model query
+  surface.
+
+```ltg
+metadata title:  "Wuthering Heights"
+metadata media:  book
+metadata author: "Emily Brontë"
+```
+
+The `metadata` keyword is distinct from `set` by design:
+- `metadata` — domain data that passes through to the `Series` record; the compiler does
+  not act on it structurally.
+- `set` — compiler/structural directives that affect how the file is processed.
+
+### Block Type Declaration
+
+Required. Must appear before `init:`. Declares the unit of time for the series and
+establishes the keyword used in `new` statements. An optional `= "<display>"` suffix
+sets the human-readable unit label shown in the UI (e.g. `"Story Arc"` for `story_arc`).
+When omitted, the compiler derives the display label by title-casing the type name and
+replacing underscores with spaces (`story_arc` → `"Story Arc"`).
+
+```
+set block: <type>                    # display label auto-derived
+set block: <type> = "<display>"      # explicit display label
+```
+
+- `<type>` — unquoted identifier used in `new` statements: `chapter`, `episode`, `part`, etc.
+- `= "<display>"` — optional. The display string shown by the UI scrubber (`"Chapter 3"`,
+  `"Story Arc 2"`). Required when the auto-derived form would look wrong (e.g. compound
+  or stylised labels).
+- Every `new` statement in the file must use the declared type; mismatches are a
+  `WrongBlockType` error.
+
+```ltg
+set block: chapter                   # unitLabel → "Chapter"
+set block: episode                   # unitLabel → "Episode"
+set block: story_arc = "Story Arc"   # unitLabel → "Story Arc" (explicit)
+set block: part = "Book Part"        # unitLabel → "Book Part" (explicit)
+```
+
+### Group Type Declaration
+
+Optional. Declares a display name for the organisational container level. Used by the
+timeline scrubber to label groups in the UI. Ignored if no `group` blocks are present.
+
+```
+set group: <type>
+```
+
+```ltg
+set group: season
+set group: volume
+set group: arc
+```
+
+### Colour Override
+
+Overrides the hash-assigned colour for a specific relationship label. Any number of
+overrides may appear before `init:`.
+
+```
+set colour: <label> = "<hex>"
+```
+
+```ltg
+set colour: married  = "#f472b6"
+set colour: siblings = "#60a5fa"
+set colour: enemy    = "#f87171"
+```
+
 ### Actor Declaration
 
 ```
@@ -70,9 +180,9 @@ actor <identifier>: "<Display Name>"
 
 - `identifier` — alphanumeric + underscores, case-sensitive, unique within the file.
 - `Display Name` — the human-readable name shown in the viewer.
-- May appear at the top level (before `init:`) or indented inside any block.
+- May appear at the top level (before `init:`) or indented inside any block or group.
 
-```
+```ltg
 actor heathcliff: "Heathcliff"
 actor catherine:  "Catherine Earnshaw"
 actor hindley:    "Hindley Earnshaw"
@@ -81,116 +191,167 @@ actor earnshaw:   "Mr. Earnshaw"
 
 ### Init Block
 
-Defines the graph state at **block 1** (the starting point). Scoped by indentation.
+Defines the graph state at **block 1** (the starting point). Required; must appear
+exactly once, before any `new` or `group` blocks.
 
-```
+```ltg
 init:
-    sibling(hindley -- catherine)
-    father(earnshaw -> hindley)
-    father(earnshaw -> catherine)
+    link sibling(hindley -- catherine)
+    link father(earnshaw -> hindley)
+    link father(earnshaw -> catherine)
 ```
 
-### Event Block
+### New Block
 
-Defines incremental changes that take effect at a new block. Blocks are numbered
-sequentially: the first `set block:` is block 2, the second is block 3, and so on.
-
-```
-set block: "Chapter 4"
-    actor linton: "Edgar Linton"
-    romantic(heathcliff -- catherine)
-    ally(catherine -- linton)
-
-set block: "Chapter 7"
-    deceased(earnshaw)
-    unlink(heathcliff, hindley)
-    enemy(hindley -> heathcliff)
-```
-
-### Directed Relationship
+Defines incremental changes at the next block. Each `new <type>:` advances the block
+counter by one. Blocks with no events are valid — they record that the graph was
+unchanged during that unit of time.
 
 ```
-<label>(<from> -> <to>)
+new <type>:                    # empty block — graph unchanged, counter advances
+new <type>: "<label>"          # optional display label (e.g. a chapter title)
+    <actor declarations>
+    <events>
 ```
 
-Creates a directed edge from `from` to `to`, labelled `label`.
-The direction is shown as an arrowhead in the viewer.
+The block's optional display label is distinct from the type display label set in
+`set block:`. The scrubber uses both: type label for position (`"Chapter 3"`) and block
+label as a subtitle (`"The Storm"`), displayed together as `"Chapter 3 — The Storm"`.
+
+```ltg
+new chapter:                           # block 2, no changes
+new chapter: "The Storm"               # block 3, with a display label
+    deceased earnshaw
+    link enemy(hindley -> heathcliff)
+new chapter:                           # block 4, no changes
+new chapter: "A New Alliance"          # block 5
+    actor hareton: "Hareton Earnshaw"
+    link father(hindley -> hareton)
+```
+
+### Group Block
+
+An optional organisational container for `new <type>:` blocks. Groups have no effect on
+block numbering — the sequential index continues across group boundaries.  One level of
+nesting is supported; groups cannot contain other groups.
 
 ```
-father(earnshaw -> heathcliff)
-mentor(nelly -> cathy)
+group "<label>":
+    new <type>:
+        <events>
+    new <type>:
 ```
 
-### Undirected Relationship
+```ltg
+group "Series 1":
+    new episode: "Pilot"
+        link ally(watson -- holmes)
+    new episode:                       # empty — no changes this episode
+    new episode: "The Chase"
+        deceased moriarty
+
+group "Series 2":
+    new episode: "A New Case"
+        actor mary: "Mary Morstan"
+        link romantic(watson -- mary)
+    new episode:
+```
+
+### Link Event
+
+Creates a relationship between two actors. The label is the token immediately after
+`link` and before `(` — its position is unambiguous and no additional keyword is needed.
+Use any identifier-safe string that describes the relationship; labels are stored verbatim.
+
+> **Reserved labels** — the following identifiers are keywords and may not be used as
+> relationship labels or actor identifiers: `link`, `unlink`, `deceased`, `actor`,
+> `init`, `new`, `group`, `set`, `metadata`.
+
+**Undirected** (symmetric — order of actors is irrelevant):
+```
+link <label>(<a> -- <b>)
+```
+
+**Directed** (asymmetric — `from` → `to` carries semantic meaning):
+```
+link <label>(<from> -> <to>)
+```
+
+```ltg
+link sibling(hindley -- catherine)       # undirected
+link married(heathcliff -- isabella)     # undirected
+link father(earnshaw -> heathcliff)      # directed: earnshaw is the father
+link blood_oath(edmond -- haydee)        # undirected, multi-word via underscore
+```
+
+### Unlink Event
+
+Removes a specific active relationship by label. The label must match the one used in
+the corresponding `link`. Order of `<a>` and `<b>` is irrelevant for undirected edges;
+either order is accepted for directed edges. Sets `endedAt` to `blockIndex - 1`.
+
+The label is always required — two actors can have more than one active relationship
+simultaneously, so omitting it would be ambiguous.
 
 ```
-<label>(<a> -- <b>)
+unlink <label> <a> <b>
 ```
 
-Creates an undirected (bidirectional) edge between `a` and `b`.
-
-```
-sibling(hindley -- catherine)
-romantic(heathcliff -- catherine)
-rival(heathcliff -- linton)
+```ltg
+unlink romantic heathcliff catherine
+unlink ally     catherine  hindley
 ```
 
 ### Deceased Event
-
-```
-deceased(<identifier>)
-```
 
 Marks an actor as having died in this block. Sets `diedAt` on the character.
 An actor can only be marked deceased once.
 
 ```
-deceased(earnshaw)
+deceased <identifier>
 ```
 
-### Unlink
-
-```
-unlink(<a>, <b>)
-```
-
-Removes the active relationship between `a` and `b` as of this block.
-The relationship's `endedAt` is set to `blockIndex - 1` (active up to the
-previous block, gone from this one onward). Order of `a` and `b` is irrelevant
-for undirected edges; for directed edges either order matches.
-
-```
-unlink(heathcliff, hindley)
+```ltg
+deceased earnshaw
+deceased catherine
 ```
 
 ---
 
-## Relationship Label → Kind Mapping
+## Colour Assignment
 
-The compiler infers a `RelationshipKind` (which drives edge colour and style) from the
-label.  Unknown labels fall back to `other`.
+Every relationship label is assigned a colour for rendering. The rules, in priority order:
 
-| Label(s) | Inferred Kind | Default Direction |
-|---|---|---|
-| `parent`, `father`, `mother`, `child`, `son`, `daughter`, `adopted` | `parent_child` | directed |
-| `sibling`, `brother`, `sister`, `twin` | `family` | undirected |
-| `family`, `cousin`, `uncle`, `aunt`, `nephew`, `niece` | `family` | undirected |
-| `romantic`, `loves`, `married`, `wife`, `husband`, `spouse`, `lover` | `romantic` | undirected |
-| `ally`, `friend`, `companion`, `confidant` | `ally` | undirected |
-| `rival`, `competitor` | `rival` | undirected |
-| `enemy`, `enemies`, `antagonist`, `nemesis` | `enemy` | undirected |
-| `mentor`, `teacher`, `student`, `apprentice` | `mentor` | directed |
-| *(anything else)* | `other` | follows `->` / `--` |
+1. **Author override** — a `set colour: <label> = "<hex>"` directive wins unconditionally.
+2. **Deterministic hash** — for labels without an override, the compiler hashes the label
+   string into a curated palette. The same label always produces the same colour, across
+   files, series, and sessions — no state required.
 
-> The inferred kind is a convenience. The label itself is stored verbatim and displayed in
-> the character panel. In a future version, explicit kind annotation will be supported:
-> `parent_child:father(earnshaw -> heathcliff)`.
+The palette is chosen to be visually distinct and legible on the viewer's dark background.
+The full `colours` map (hash defaults + overrides) is included in the `CompiledGraph` so
+the backend persists it and the frontend never recomputes it.
 
 ---
 
 ## Full Example — Wuthering Heights
 
 ```ltg
+# ── Metadata ─────────────────────────────────────────────────────────
+metadata title:  "Wuthering Heights"
+metadata media:  book
+metadata author: "Emily Brontë"
+
+# ── Structural declarations ───────────────────────────────────────────
+set block: chapter
+
+set colour: father   = "#34d399"
+set colour: sibling  = "#60a5fa"
+set colour: married  = "#f472b6"
+set colour: romantic = "#f472b6"
+set colour: ally     = "#a78bfa"
+set colour: rival    = "#fb923c"
+set colour: enemy    = "#f87171"
+
 # ── Actors ──────────────────────────────────────────────────────────
 actor earnshaw:   "Mr. Earnshaw"
 actor hindley:    "Hindley Earnshaw"
@@ -199,46 +360,111 @@ actor heathcliff: "Heathcliff"
 actor nelly:      "Nelly Dean"
 actor frances:    "Frances Earnshaw"
 
-# ── Initial state (Chapter 1) ────────────────────────────────────────
+# ── Block 1: initial state ───────────────────────────────────────────
 init:
-    father(earnshaw -> hindley)
-    father(earnshaw -> catherine)
-    sibling(hindley -- catherine)
-    ally(heathcliff -- catherine)
-    ally(nelly -- catherine)
+    link father(earnshaw -> hindley)
+    link father(earnshaw -> catherine)
+    link sibling(hindley -- catherine)
+    link ally(heathcliff -- catherine)
+    link ally(nelly -- catherine)
 
-# ── Chapter 3 ────────────────────────────────────────────────────────
-set block: "Chapter 3"
-    married(hindley -- frances)
-    rival(hindley -> heathcliff)
+# ── Block 2 ─────────────────────────────────────────────────────────
+new chapter:
 
-# ── Chapter 6 ────────────────────────────────────────────────────────
-set block: "Chapter 6"
-    actor linton: "Edgar Linton"
+# ── Block 3 ─────────────────────────────────────────────────────────
+new chapter: "Chapter 3"
+    link married(hindley -- frances)
+    link rival(hindley -> heathcliff)
+
+# ── Blocks 4–5 ──────────────────────────────────────────────────────
+new chapter:
+new chapter:
+
+# ── Block 6 ─────────────────────────────────────────────────────────
+new chapter: "Chapter 6"
+    actor linton:   "Edgar Linton"
     actor isabella: "Isabella Linton"
-    sibling(linton -- isabella)
-    ally(catherine -- linton)
+    link sibling(linton -- isabella)
+    link ally(catherine -- linton)
 
-# ── Chapter 9 ────────────────────────────────────────────────────────
-set block: "Chapter 9"
-    deceased(earnshaw)
-    deceased(frances)
-    romantic(heathcliff -- catherine)
+# ── Blocks 7–8 ──────────────────────────────────────────────────────
+new chapter:
+new chapter:
 
-# ── Chapter 14 ───────────────────────────────────────────────────────
-set block: "Chapter 14"
-    married(catherine -- linton)
-    unlink(heathcliff, catherine)
-    enemy(heathcliff -> linton)
+# ── Block 9 ─────────────────────────────────────────────────────────
+new chapter: "Chapter 9"
+    deceased earnshaw
+    deceased frances
+    link romantic(heathcliff -- catherine)
 
-# ── Chapter 17 ───────────────────────────────────────────────────────
-set block: "Chapter 17"
-    married(heathcliff -- isabella)
-    enemy(heathcliff -> isabella)
+# ── Blocks 10–13 ────────────────────────────────────────────────────
+new chapter:
+new chapter:
+new chapter:
+new chapter:
 
-# ── Chapter 16 ───────────────────────────────────────────────────────
-set block: "Chapter 16"
-    deceased(catherine)
+# ── Block 14 ────────────────────────────────────────────────────────
+new chapter: "Chapter 14"
+    link married(catherine -- linton)
+    unlink romantic heathcliff catherine
+    link enemy(heathcliff -> linton)
+
+# ── Block 15 ────────────────────────────────────────────────────────
+new chapter:
+
+# ── Block 16 ────────────────────────────────────────────────────────
+new chapter: "Chapter 16"
+    deceased catherine
+
+# ── Block 17 ────────────────────────────────────────────────────────
+new chapter: "Chapter 17"
+    link married(heathcliff -- isabella)
+    link enemy(heathcliff -> isabella)
+```
+
+---
+
+## Full Example — Grouped (TV Show)
+
+```ltg
+# ── Metadata ─────────────────────────────────────────────────────────
+metadata title: "Sherlock"
+metadata media: show
+
+# ── Structural declarations ───────────────────────────────────────────
+set block: episode
+set group: season
+
+set colour: ally    = "#a78bfa"
+set colour: enemy   = "#f87171"
+set colour: married = "#f472b6"
+
+# ── Actors ──────────────────────────────────────────────────────────
+actor holmes:  "Sherlock Holmes"
+actor watson:  "Dr. Watson"
+
+# ── Block 1: initial state ───────────────────────────────────────────
+init:
+    link ally(holmes -- watson)
+
+# ── Season 1 ────────────────────────────────────────────────────────
+group "Season 1":
+    new episode: "A Study in Pink"
+        actor lestrade: "Inspector Lestrade"
+        link ally(holmes -- lestrade)
+    new episode:
+    new episode: "The Great Game"
+        actor moriarty: "Jim Moriarty"
+        link enemy(moriarty -> holmes)
+
+# ── Season 2 ────────────────────────────────────────────────────────
+group "Season 2":
+    new episode:
+    new episode: "The Hounds of Baskerville"
+        actor mary: "Mary Morstan"
+    new episode: "The Reichenbach Fall"
+        deceased moriarty
+        unlink ally holmes lestrade
 ```
 
 ---
@@ -256,26 +482,44 @@ Validates the AST against these rules:
 
 | Rule | Error |
 |---|---|
+| `metadata title:` must appear exactly once, before `init:`. | `MissingMetadata` / `DuplicateMetadata` |
+| `metadata media:` must appear exactly once, before `init:`. | `MissingMetadata` / `DuplicateMetadata` |
+| `metadata media:` value must be `book`, `show`, or `film`. | `InvalidMediaType` |
+| `set block: <type>` must appear exactly once, before `init:`. | `MissingBlockDeclaration` / `DuplicateBlockDeclaration` |
+| The optional `= "<display>"` value on `set block:` must be a non-empty string. | `InvalidDisplayLabel` |
+| Every `new` statement must use the type declared in `set block:`. | `WrongBlockType` |
 | Every identifier used in a statement must be declared as an actor before that point in the file (forward references are not allowed). | `UndeclaredActor` |
 | An actor identifier must be unique across the whole file. | `DuplicateActor` |
-| A relationship between two actors (in either direction) may not be declared twice in the same block, or while one already exists from a previous block. | `DuplicateRelationship` |
+| A `link` between two actors with the same label may not be declared while one with that label already exists between them. | `DuplicateRelationship` |
 | `deceased` may only be applied once per actor. | `AlreadyDeceased` |
-| `unlink(a, b)` requires an active relationship between `a` and `b` at the point of the call. | `NoSuchRelationship` |
-| A relationship that was unlinked cannot be referenced again without being re-declared. | `RelationshipAlreadyRemoved` |
-| The `init:` block must appear exactly once, before any `set block:` declarations. | `MissingInit` / `DuplicateInit` |
+| `unlink <label> <a> <b>` requires an active relationship with that exact label between `a` and `b`. | `NoSuchRelationship` |
+| A relationship that was unlinked cannot be referenced again without a new `link`. | `RelationshipAlreadyRemoved` |
+| A label used in a `link` statement must not be a reserved keyword. | `ReservedLabel` |
+| A `set colour:` value must be a valid 6-digit hex colour string (`#rrggbb`). | `InvalidColour` |
+| Groups cannot contain other groups. | `NestedGroup` |
+| The `init:` block must appear exactly once, before any `new` or `group` blocks. | `MissingInit` / `DuplicateInit` |
 
 Each error carries: **error code**, **message**, and **source location** (`line`, `column`).
 
 ### Pass 3 — Compilation
 Converts the validated AST into the LitTree domain model:
 
-- One `Series` record (title, mediaType, unitLabel, totalUnits)
+- One `Series` record:
+  - `title` from `metadata title:`
+  - `mediaType` from `metadata media:`
+  - `unitLabel` from `set block:` — the explicit `= "<display>"` value if present,
+    otherwise the type name title-cased with underscores replaced by spaces
+  - `totalUnits` = total block count (including `init:`)
 - One `Character` per actor with `introducedAt` = block index of declaration
 - One `Relationship` per edge with `introducedAt` = block index of declaration, `endedAt`
   set when `unlink` is used (= `unlinkBlockIndex - 1`)
+- One `colours` map — label → hex string — combining hash-assigned defaults with any
+  `set colour:` overrides
+- One `groups` list — for the timeline scrubber — each entry records the group label and
+  the range of block indices it contains; absent if no `group` blocks are used
 
-The compiler does **not** persist anything — it returns a pure data structure that is then
-POSTed to the backend import endpoint (Phase 3 below).
+The compiler does **not** persist anything — it returns a pure data structure that is
+then POSTed to the backend import endpoint.
 
 ---
 
@@ -351,18 +595,67 @@ The AST is internal to the language server.  External consumers receive only the
 formats described in the next section.
 
 ```rust
-use logos::Span; // byte range in the source string
-
-#[derive(Debug, Clone)]
-pub struct SourceLocation {
-    pub line:   u32, // 0-indexed, matches LSP convention
-    pub column: u32,
-}
+use logos::Span;
 
 #[derive(Debug, Clone)]
 pub struct Spanned<T> {
     pub node: T,
     pub span: Span,
+}
+
+// ── Metadata ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum MediaType { Book, Show, Film }
+
+/// Collected from `metadata title:`, `metadata media:`, `metadata author:`.
+/// `title` and `media` are required; the checker enforces their presence.
+#[derive(Debug, Clone)]
+pub struct SeriesMetadata {
+    pub title:  String,
+    pub media:  MediaType,
+    pub author: Option<String>,
+}
+
+// ── Structural declarations ──────────────────────────────────────────
+
+/// `set block: chapter` or `set block: story_arc = "Story Arc"`
+#[derive(Debug, Clone)]
+pub struct BlockTypeDecl {
+    pub type_name:     String,         // keyword used in `new` statements
+    pub display_label: Option<String>, // explicit override; auto-derived if None
+}
+
+impl BlockTypeDecl {
+    /// Returns the resolved unitLabel: explicit override or title-cased type_name.
+    pub fn unit_label(&self) -> String {
+        self.display_label.clone().unwrap_or_else(|| {
+            self.type_name
+                .split('_')
+                .map(|w| {
+                    let mut c = w.chars();
+                    match c.next() {
+                        None => String::new(),
+                        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    }
+}
+
+/// `set group: season`  (optional)
+#[derive(Debug, Clone)]
+pub struct GroupTypeDecl {
+    pub type_name: String,
+}
+
+/// `set colour: married = "#f472b6"`
+#[derive(Debug, Clone)]
+pub struct ColourOverride {
+    pub label: String,
+    pub hex:   String,
 }
 
 // ── Statements ──────────────────────────────────────────────────────
@@ -373,12 +666,22 @@ pub struct ActorDecl {
     pub display_name: String,
 }
 
+/// Produced by `link <label>(<from> -> <to>)` or `link <label>(<a> -- <b>)`.
+/// The label is inferred from position — always the token between `link` and `(`.
 #[derive(Debug, Clone)]
-pub struct RelationshipStmt {
+pub struct LinkStmt {
     pub label:    String,
-    pub from:     String, // actor identifier
+    pub from:     String,
     pub to:       String,
-    pub directed: bool,   // true = ->, false = --
+    pub directed: bool,
+}
+
+/// Produced by `unlink <label> <a> <b>`.
+#[derive(Debug, Clone)]
+pub struct UnlinkStmt {
+    pub label: String,
+    pub a:     String,
+    pub b:     String,
 }
 
 #[derive(Debug, Clone)]
@@ -387,17 +690,11 @@ pub struct DeceasedStmt {
 }
 
 #[derive(Debug, Clone)]
-pub struct UnlinkStmt {
-    pub a: String,
-    pub b: String,
-}
-
-#[derive(Debug, Clone)]
 pub enum Statement {
     Actor(ActorDecl),
-    Relationship(RelationshipStmt),
-    Deceased(DeceasedStmt),
+    Link(LinkStmt),
     Unlink(UnlinkStmt),
+    Deceased(DeceasedStmt),
 }
 
 // ── Blocks ──────────────────────────────────────────────────────────
@@ -407,19 +704,38 @@ pub struct InitBlock {
     pub statements: Vec<Spanned<Statement>>,
 }
 
+/// Produced by `new <type>:` or `new <type>: "<label>"`.
+/// Empty `statements` = valid empty block (graph unchanged this unit).
 #[derive(Debug, Clone)]
 pub struct EventBlock {
-    pub name:       String, // value of set block: "..."
+    pub label:      Option<String>,
     pub statements: Vec<Spanned<Statement>>,
+}
+
+/// Produced by `group "<label>":` with indented EventBlocks.
+#[derive(Debug, Clone)]
+pub struct GroupBlock {
+    pub label:  Option<String>,
+    pub blocks: Vec<Spanned<EventBlock>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TopLevelItem {
+    Block(EventBlock),
+    Group(GroupBlock),
 }
 
 // ── Program ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct Program {
+    pub metadata:         SeriesMetadata,
+    pub block_type:       BlockTypeDecl,
+    pub group_type:       Option<GroupTypeDecl>,
+    pub colour_overrides: Vec<Spanned<ColourOverride>>,
     pub top_level_actors: Vec<Spanned<ActorDecl>>,
     pub init_block:       InitBlock,
-    pub event_blocks:     Vec<Spanned<EventBlock>>,
+    pub items:            Vec<Spanned<TopLevelItem>>,
 }
 ```
 
@@ -430,29 +746,27 @@ pub struct Program {
 ### Diagnostics (standard LSP `textDocument/publishDiagnostics`)
 
 The language server pushes diagnostics to the client using the standard LSP notification.
-The frontend uses `monaco-languageclient` and receives these natively — no custom parsing
-of errors on the frontend side.
+The frontend uses `monaco-languageclient` and receives these natively.
 
 ```jsonc
 // Error codes sent in Diagnostic.code
+// MissingMetadata | DuplicateMetadata | InvalidMediaType |
+// MissingBlockDeclaration | DuplicateBlockDeclaration | InvalidDisplayLabel | WrongBlockType |
 // UndeclaredActor | DuplicateActor | DuplicateRelationship |
 // AlreadyDeceased | NoSuchRelationship | RelationshipAlreadyRemoved |
+// ReservedLabel | InvalidColour | NestedGroup |
 // MissingInit | DuplicateInit | SyntaxError
 {
   "range": { "start": { "line": 4, "character": 12 },
              "end":   { "line": 4, "character": 22 } },
-  "severity": 1,        // 1=Error, 2=Warning, 3=Info
+  "severity": 1,
   "code": "UndeclaredActor",
   "source": "ltg",
   "message": "Actor 'linton' has not been declared"
 }
 ```
 
-### Compile Request (custom HTTP endpoint on the language server)
-
-The browser calls this when the user clicks "Save to server".  The language server runs
-a full compile and returns the domain model JSON.  The frontend then POSTs that directly
-to the graph API — the language server never talks to the database.
+### Compile Request
 
 ```
 POST /compile
@@ -467,34 +781,62 @@ Content-Type: text/plain
   "ok": true,
   "graph": {
     "series": {
-      "title": "Wuthering Heights",
-      "mediaType": "book",
-      "unitLabel": "Chapter",
-      "totalUnits": 8
+      "title":      "Wuthering Heights",  // from: metadata title:
+      "mediaType":  "book",               // from: metadata media:
+      "unitLabel":  "Chapter",            // from: set block: chapter (auto-derived)
+      "totalUnits": 34
     },
     "characters": [
-      { "identifier": "heathcliff", "name": "Heathcliff",
-        "aliases": [], "introducedAt": 1, "diedAt": null }
+      {
+        "identifier": "heathcliff",   // ltg identifier — stored for export round-trip
+        "name":       "Heathcliff",
+        "aliases":    [],
+        "introducedAt": 1,
+        "diedAt": null
+      }
     ],
     "relationships": [
-      { "fromIdentifier": "earnshaw", "toIdentifier": "heathcliff",
-        "kind": "parent_child", "label": "father",
-        "directed": true, "introducedAt": 1, "endedAt": null }
+      {
+        "fromIdentifier": "earnshaw",
+        "toIdentifier":   "heathcliff",
+        "label":          "father",
+        "directed":       true,
+        "introducedAt":   1,
+        "endedAt":        null
+      }
+    ],
+    // Merged colour map: hash defaults + set colour: overrides.
+    "colours": {
+      "father":   "#34d399",
+      "sibling":  "#60a5fa",
+      "married":  "#f472b6",
+      "romantic": "#f472b6",
+      "ally":     "#a78bfa",
+      "rival":    "#fb923c",
+      "enemy":    "#f87171"
+    },
+    // Present only when group blocks are used. Block indices are 1-based.
+    "groups": [
+      { "label": "Season 1", "fromBlock": 2, "toBlock": 4 },
+      { "label": "Season 2", "fromBlock": 5, "toBlock": 7 }
     ]
   }
 }
 
-// 422 Unprocessable — type errors (frontend renders these in the editor)
+// 422 Unprocessable — type errors
 {
   "ok": false,
   "errors": [
-    { "code": "UndeclaredActor", "message": "Actor 'linton' has not been declared",
-      "loc": { "line": 4, "column": 12 } }
+    {
+      "code":    "MissingMetadata",
+      "message": "'metadata media:' is required but was not declared",
+      "loc": { "line": 0, "column": 0 }
+    }
   ]
 }
 ```
 
-### Backend Import (graph API — unchanged)
+### Backend Import
 
 ```
 POST /api/import
@@ -505,20 +847,180 @@ Content-Type: application/json
 
 ---
 
+## Persistence Model
+
+The LTG compiler emits a `CompiledGraph` that the backend persists across six tables.
+The schema below reflects the state after migration `002_ltg_import`.
+
+### Table overview
+
+| Table | Purpose |
+|---|---|
+| `series` | One row per series — title, media type, unit label, total blocks |
+| `characters` | One row per actor — display name, aliases, temporal window, `ltg_identifier` |
+| `relationships` | One row per edge — free-form label, directed flag, temporal window |
+| `blocks` | One row per block — display label, group membership |
+| `series_colours` | One row per label per series — hex colour, override flag |
+
+### `characters.ltg_identifier` (Gap 2)
+
+The `ltg_identifier` column stores the unquoted identifier used in the `.ltg` source
+(e.g. `heathcliff`, `young_cathy`). It is:
+
+- **Nullable** — records created outside the LTG import flow (manual inserts, seed data)
+  do not have one and are unaffected.
+- **Unique within a series** — a partial unique index on `(series_id, ltg_identifier) WHERE
+  ltg_identifier IS NOT NULL` enforces this without conflicting with NULL rows.
+- **Required for export round-trip** — `GET /api/series/:id/export` uses it as the actor
+  identifier in the generated `.ltg` file. Series without identifiers cannot be exported
+  to LTG.
+- **Upsert key** — `POST /api/import` uses `(series_id, ltg_identifier)` as the natural
+  key, so re-importing an updated `.ltg` file updates existing records in place rather than
+  creating duplicates.
+
+### `blocks` table (Gap 3a)
+
+Persists the timeline structure so the scrubber can display block labels and group
+membership without recompiling the source.
+
+```sql
+CREATE TABLE blocks (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    series_id   UUID NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    block_index INT  NOT NULL CHECK (block_index >= 1),
+    label       TEXT,   -- optional: from `new chapter: "The Storm"`
+    group_label TEXT,   -- optional: from enclosing `group "Season 1":`
+    UNIQUE (series_id, block_index)
+);
+```
+
+`block_index` is the global sequential index (1 = `init:`, 2 = first `new <type>:`, etc.).
+Groups do not affect numbering — a block inside a group has the same index it would have
+outside one.
+
+### `series_colours` table (Gap 3b)
+
+Stores the full colour map for each series — both hash-derived defaults and `set colour:`
+overrides. The frontend reads this table to colour edges without recomputing hashes.
+
+```sql
+CREATE TABLE series_colours (
+    series_id   UUID    NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+    label       TEXT    NOT NULL,
+    hex         TEXT    NOT NULL,
+    is_override BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (series_id, label)
+);
+```
+
+`is_override = true` means the colour came from a `set colour:` directive in the source.
+The export path (`GET /api/series/:id/export`) emits only override rows as `set colour:`
+directives; hash-derived rows are recomputed by the compiler on the next import.
+
+### `relationships` label model
+
+Migration `002` transitions the `relationships` table to the free-form label model:
+
+- `kind` — the old enum (`family`, `parent_child`, …) is now **nullable**. Existing seed
+  data retains its kind value. LTG-imported relationships set `kind = NULL`.
+- `label` — now **NOT NULL**. Seed data was backfilled from `kind`; LTG-imported rows
+  use the free-form label directly (e.g. `siblings`, `blood_oath`).
+
+`label` is the canonical field used for colour lookup and export. `kind` is a legacy
+read-only field used only by the existing frontend edge-styling path.
+
+---
+
+## Bidirectional Sync
+
+The LTG editor and the visual graph editor share the same underlying data. To avoid
+conflicts, the system uses a **mode ownership model**: only one mode can be the source
+of truth at a time.
+
+### Mode ownership
+
+| Mode | Who owns the source of truth | Sync direction |
+|---|---|---|
+| **Text mode** | The `.ltg` text in Monaco | text → graph (live preview) |
+| **Visual mode** | The visual graph canvas | graph → text (on export) |
+
+Simultaneous bidirectional sync is not supported. The UI enforces this with a mode toggle
+visible in the editor panel header. Switching modes prompts the user if there are unsaved
+changes.
+
+### Text → Graph (Gap 4)
+
+While in text mode, the language server provides live preview:
+
+1. On every `textDocument/didChange` (debounced at 300 ms), the language server runs the
+   full pipeline: lex → parse → check → compile.
+2. If the file is valid, the server pushes a `CompiledGraph` to the frontend via a custom
+   LSP notification: `ltg/graphUpdated`.
+3. The frontend's `GraphSource` (see below) switches to `local` mode and renders the
+   compiled graph directly — no round-trip to the backend API.
+4. Diagnostics (errors/warnings) are pushed via the standard `publishDiagnostics`
+   notification and appear as squiggles in Monaco.
+
+The graph preview is ephemeral — it is not persisted until the user clicks "Save to
+server", which triggers a `POST /api/import`.
+
+### Graph → LTG (Gap 4)
+
+While in visual mode, changes to the graph are serialised to LTG on export:
+
+1. The user edits the graph (adds/removes relationships, marks a character deceased, etc.)
+   using the visual editor's action panel.
+2. All changes are applied to the in-memory `CompiledGraph`.
+3. On "Export to LTG" (or on switch back to text mode), the frontend sends the current
+   `CompiledGraph` to `POST /compile/export` — a new language-server endpoint that
+   generates `.ltg` source from a `CompiledGraph`.
+4. The generated source replaces the Monaco editor content.
+
+### GraphSource abstraction (Gap 5)
+
+The frontend graph canvas is decoupled from its data source via a `GraphSource` union:
+
+```ts
+type GraphSource =
+  | { kind: 'remote'; seriesId: string }         // backed by GET /api/series/:id/graph
+  | { kind: 'local';  graph: CompiledGraph }      // backed by an in-memory CompiledGraph
+```
+
+- **`remote`** — the current default. `useGraphData` fetches from the Go API and the
+  scrubber controls which block is visible.
+- **`local`** — active during text-mode live preview and after a visual-mode import before
+  "Save to server". The scrubber still works — it filters the in-memory graph client-side.
+
+When the user saves to the server (`POST /api/import`), the source transitions from
+`local` to `remote` with the newly created `seriesId`.
+
+### Visual editor target block (Gap 6)
+
+When in visual mode, the scrubber position determines **which block receives new events**
+during export. The rule is:
+
+> New events added in visual mode are assigned to the block currently shown by the
+> scrubber. If the user is at block 5, a new `link` statement is emitted into the `new
+> <type>:` block at index 5 in the generated `.ltg` source.
+
+This means:
+- The user navigates to the block they want to edit using the scrubber.
+- They make changes on the canvas (drag a new edge, click "Mark deceased", etc.).
+- On export, all changes are attributed to the current block.
+- Changes that span multiple blocks (e.g. an `unlink` that should appear in block 7 while
+  the relationship was created in block 3) require the user to navigate to the target block
+  before making the change.
+
+The visual editor enforces this constraint explicitly — the action panel always displays
+"Editing block N" so the user knows where events will land.
+
+---
+
 ## Planned Directives (Future Syntax)
 
 These are reserved for later versions and must not be used as actor identifiers or labels.
 
 ```ltg
-# Series-level metadata
-set title:     "Wuthering Heights"
-set media:     book          # book | show | film
-set unit:      "Chapter"     # displayed in the UI as "Chapter 3", "Episode 7", etc.
-set author:    "Emily Brontë"
-
-# Explicit kind override (when inference is wrong or ambiguous)
-parent_child:father(earnshaw -> heathcliff)
-
 # Aliases
 alias(heathcliff, "The Dark Stranger")
 
@@ -532,11 +1034,20 @@ describe(heathcliff, "A foundling brought from Liverpool …")
 
 ### Phase A — Specification *(done)*
 - [x] Language grammar defined
-- [x] Statement vocabulary complete
+- [x] Statement vocabulary complete (`link`, `unlink`, `deceased`)
+- [x] `metadata` keyword for required series data (`title`, `media`) and optional fields (`author`); distinct from `set` by design
+- [x] `set block: <type>` required; optional `= "<display>"` suffix for explicit unit label; auto-derives by title-casing when omitted
+- [x] `new <type>:` replaces `set block: "<label>"`; empty blocks supported
+- [x] `group "<label>":` for one level of hierarchical block grouping; `set group:` optional
+- [x] Free-form relationship labels — no fixed kind enum; label inferred from position
+- [x] Reserved keywords illegal as labels and actor identifiers
+- [x] Colour assignment: deterministic hash + `set colour:` override
 - [x] Type checking rules documented
 - [x] AST and wire format types specified
 - [x] Architecture: language server as the single source of truth
-- [x] Full worked example (Wuthering Heights)
+- [x] Full worked examples (Wuthering Heights, grouped TV show)
+- [x] Persistence model documented: `ltg_identifier`, `blocks` table, `series_colours` table, label-first `relationships` schema
+- [x] Bidirectional sync model documented: mode ownership, `GraphSource` abstraction, visual editor target block
 
 ---
 
@@ -546,16 +1057,25 @@ All parsing, type checking, and compilation lives here.  The frontend never sees
 
 **Core pipeline (`ltg-langserver/src/`)**
 - [ ] `lexer.rs` — `logos`-derived token enum; handles indentation depth, quoted strings,
-      identifiers, `->` / `--` operators, line tracking for LSP positions
-- [ ] `parser.rs` — `chumsky` combinator parser; produces `Program` or
-      `Vec<ParseError>` with source spans; error recovery allows partial ASTs so
-      diagnostics keep working mid-edit
-- [ ] `checker.rs` — semantic analyser; simulates graph state block-by-block (accumulates
-      active relationships, tracks deceased actors) and emits `Vec<Diagnostic>` with
-      typed error codes
-- [ ] `compiler.rs` — validated `Program` → `CompiledGraph` (the JSON struct POSTed to the
-      graph API); pure function, no I/O
-- [ ] `pipeline.rs` — chains lex → parse → check → compile; returns a `PipelineResult`
+      identifiers, `->` / `--` operators; keywords: `metadata`, `link`, `unlink`,
+      `deceased`, `new`, `group`, `set`, `actor`, `init`; line tracking for LSP positions
+- [ ] `parser.rs` — `chumsky` combinator parser; produces `Program` or `Vec<ParseError>`
+      with source spans; error recovery allows partial ASTs so diagnostics keep working
+      mid-edit; parses `metadata` directives, `set block:` with optional `= "<display>"`,
+      `set group:` / `set colour:`, `new <type>:` blocks (optional label, empty body),
+      and `group "<label>":` containers
+- [ ] `checker.rs` — semantic analyser; enforces `metadata title:` and `metadata media:`
+      presence and uniqueness; validates `media` value against `book | show | film`;
+      validates `set block:` declared before `init:` and that all `new` statements match
+      it; simulates graph state block-by-block (tracks active relationships keyed by
+      `(label, a, b)`, tracks deceased actors); rejects reserved keywords as labels or
+      actor identifiers; validates `set colour:` hex values; rejects nested groups
+- [ ] `compiler.rs` — validated `Program` → `CompiledGraph`; resolves `unitLabel` via
+      `BlockTypeDecl::unit_label()`; assigns sequential block indices; computes the final
+      `colours` map; emits the `groups` list when group blocks are present; pure function
+- [ ] `colours.rs` — palette hash: maps a label string to a hex colour from a curated
+      dark-background-friendly palette; deterministic, no state
+- [ ] `pipeline.rs` — chains lex → parse → check → compile; returns `PipelineResult`
       with diagnostics and optional `CompiledGraph`
 - [ ] Unit tests for each module (`cargo test`)
 
@@ -570,8 +1090,7 @@ All parsing, type checking, and compilation lives here.  The frontend never sees
       as the command result (used by the "Save" button)
 
 **HTTP companion (`ltg-langserver/src/http.rs`, `axum`)**
-- [ ] `POST /compile` — one-shot compile for the file-upload import flow; no WebSocket
-      session required
+- [ ] `POST /compile` — one-shot compile for the file-upload import flow
 - [ ] `GET /health`
 
 **Infrastructure**
@@ -587,53 +1106,68 @@ All parsing, type checking, and compilation lives here.  The frontend never sees
 
 The frontend has **no parsing logic**.  It sends raw text, receives structured JSON.
 
-**File-upload / paste flow (no editor session needed)**
 - [ ] "Import" button in the header
 - [ ] `ImportModal` component — textarea + `.ltg` file upload
-- [ ] On submit: `POST /compile` (language server HTTP endpoint) → display errors or
-      proceed
-- [ ] On success: `POST /api/import` (graph API) → load the returned series in the viewer
+- [ ] On submit: `POST /compile` → display errors or proceed
+- [ ] On success: `POST /api/import` → load the returned series in the viewer
 - [ ] In-memory series mode in `App.tsx` — bypasses `useGraphData` when a compiled graph
       is active; "Clear" button to return to backend-served data
 
 ---
 
 ### Phase D — Backend Import API (Graph API, Go)
-- [ ] `POST /api/import` — accepts `CompiledGraph` JSON, writes to PostgreSQL, returns the
-      new `Series` UUID and the first snapshot
-- [ ] Upsert semantics keyed on `(series_id, identifier)` — re-importing updates in place
-- [ ] Server-side validation (the language server is the primary guard, but the API
-      validates shape)
-- [ ] `GET /api/series/:id/export` — serialise an existing series back to LTG source
-      (round-trip)
+
+**Schema** *(migration `002_ltg_import` — done)*
+- [x] `characters.ltg_identifier` — nullable text, partial unique index on `(series_id, ltg_identifier)`
+- [x] `blocks (series_id, block_index, label, group_label)` — timeline structure persistence
+- [x] `series_colours (series_id, label, hex, is_override)` — colour map persistence
+- [x] `relationships.kind` — nullable (legacy field); `relationships.label` — NOT NULL (canonical field)
+
+**API**
+- [ ] `POST /api/import` — accepts `CompiledGraph` JSON, writes to PostgreSQL
+- [ ] Persist `colours` map → `series_colours`; `groups` list → `blocks.group_label`
+- [ ] Upsert semantics keyed on `(series_id, ltg_identifier)` — re-importing updates in place
+- [ ] Extend `GET /api/series/:id/graph` to include `colours` map from `series_colours`
+- [ ] `GET /api/series/:id/export` — serialise an existing series back to `.ltg` source,
+      including `metadata` directives, `set block:` with display label, `set group:`,
+      `set colour:` (overrides only), `group` containers, and empty `new <type>:` blocks
 
 ---
 
 ### Phase E — In-Browser Editor (Frontend — thin client)
 
-A live editing experience powered entirely by the language server over WebSocket.  The
-frontend renders what the server tells it.
-
+**Editor**
 - [ ] Embed **Monaco Editor** in a split-pane layout (editor left, graph preview right)
 - [ ] `monaco-languageclient` + `vscode-languageserver-protocol` — connects Monaco to the
-      language server WebSocket; diagnostics (squiggles) appear automatically via
-      `publishDiagnostics` with zero frontend parsing code
-- [ ] LTG TextMate grammar for Monaco syntax highlighting (keywords, strings, operators)
+      language server WebSocket; diagnostics appear automatically via `publishDiagnostics`
+- [ ] LTG TextMate grammar for Monaco syntax highlighting (`metadata`, `link`, `unlink`,
+      `deceased`, `new`, `group`, `set` keywords, `->` / `--` operators, `set colour:`
+      directives, strings, comments)
 - [ ] "Save to server" button — sends `ltg.compile` command over LSP, receives
       `CompiledGraph`, POSTs to `POST /api/import`
 - [ ] Debounce document changes at 300 ms before sending `didChange` to the server
+
+**Bidirectional sync**
+- [ ] `GraphSource` union in the frontend store (`remote` | `local`) — see Bidirectional
+      Sync section
+- [ ] Mode toggle in editor panel header (text mode / visual mode)
+- [ ] Text mode: on `ltg/graphUpdated` notification, switch `GraphSource` to `local` and
+      re-render the graph canvas
+- [ ] Visual mode: action panel with "Editing block N" indicator driven by scrubber
+      position; changes applied to in-memory `CompiledGraph`
+- [ ] Export flow: `POST /compile/export` on the language server, replaces Monaco content
+      with generated `.ltg`; language server adds a new `POST /compile/export` endpoint
+      accepting `CompiledGraph` and returning `.ltg` source
 
 ---
 
 ### Phase F — Tooling & DX
 
-Because the language server implements standard LSP, most tooling comes for free.
-
-- [ ] **VSCode extension** — `vscode-languageclient` connects to `ltg-langserver` over
-      stdio; provides diagnostics, go-to-definition (actor declarations), hover (show kind
-      inference)
-- [ ] **CLI** — `ltg check <file>` embeds the language server core (no network); exits
-      non-zero on errors (CI-friendly)
-- [ ] **Formatter** — `ltg fmt` canonicalises indentation, aligns `:` in actor declarations,
-      sorts top-level actors alphabetically
+- [ ] **VSCode extension** — diagnostics, go-to-definition (actor declarations), hover
+      (show resolved colour swatch for `link` statements and label hash preview)
+- [ ] **CLI** — `ltg check <file>` embeds the language server core; exits non-zero on
+      errors (CI-friendly)
+- [ ] **Formatter** — `ltg fmt` canonicalises indentation; groups `metadata` directives
+      first, then `set` directives, then actors; aligns `:` within each group; collapses
+      consecutive empty `new <type>:` blocks onto one line with a count comment
 - [ ] **`.ltg` file association** — `files.associations` in the VSCode extension manifest

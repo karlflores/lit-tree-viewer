@@ -29,6 +29,7 @@ export type Character = Readonly<{
   imageUrl: string | null
   introducedAt: number
   diedAt: number | null
+  ltgIdentifier?: string  // present only for LTG-imported characters; used for export round-trip
 }>
 
 export const getCharacterState = (character: Character, atUnit: number): CharacterState => {
@@ -65,8 +66,8 @@ export type Relationship = Readonly<{
   seriesId: string
   fromId: string
   toId: string
-  kind: RelationshipKind
-  label: string | null
+  kind?: RelationshipKind   // absent for LTG-imported relationships; use label for styling
+  label: string             // canonical identifier; always present after migration 002
   directed: boolean
   introducedAt: number
   endedAt: number | null
