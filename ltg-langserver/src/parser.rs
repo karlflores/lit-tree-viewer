@@ -705,6 +705,100 @@ group "Season 2":
         assert_eq!(s1.blocks[0].0.statements.len(), 2); // actor + link
     }
 
+    // ── Permissive metadata parsing (checker catches semantic errors) ─────
+
+    #[test]
+    fn parse_metadata_unknown_key_passes_through() {
+        // The parser is permissive — unknown keys (e.g. "publisher") are valid
+        // at the AST level. The checker enforces required fields.
+        let prog = parse_ok(r#"metadata publisher: "Penguin""#);
+        assert!(matches!(
+            decl(&prog, 0),
+            TopLevelDecl::Metadata(MetadataDirective { key, value: MetadataValue::Str(v) })
+                if key == "publisher" && v == "Penguin"
+        ));
+    }
+
+    #[test]
+    fn parse_metadata_media_unknown_value_passes_through() {
+        // Unknown media values are parsed as MetadataValue::Str — the checker
+        // produces InvalidMediaType. The parser must not fail here.
+        let prog = parse_ok("metadata media: romance");
+        assert!(matches!(
+            decl(&prog, 0),
+            TopLevelDecl::Metadata(MetadataDirective {
+                key,
+                value: MetadataValue::Str(v),
+            }) if key == "media" && v == "romance"
+        ));
+    }
+
+    // ── Multiple set colour directives ────────────────────────────────────
+
+    #[test]
+    fn parse_multiple_set_colours() {
+        let src = r##"set colour: father  = "#34d399"
+set colour: sibling = "#60a5fa"
+set colour: enemy   = "#f87171""##;
+        let prog = parse_ok(src);
+        assert_eq!(prog.items.len(), 3);
+        for item in &prog.items {
+            assert!(matches!(&item.0, TopLevelDecl::SetColour(_)));
+        }
+        // Spot-check the first and last labels and hex values.
+        assert!(matches!(
+            decl(&prog, 0),
+            TopLevelDecl::SetColour(ColourOverride { label, hex })
+                if label == "father" && hex == "#34d399"
+        ));
+        assert!(matches!(
+            decl(&prog, 2),
+            TopLevelDecl::SetColour(ColourOverride { label, hex })
+                if label == "enemy" && hex == "#f87171"
+        ));
+    }
+
+    // ── Underscore link labels ────────────────────────────────────────────
+
+    #[test]
+    fn parse_link_with_underscore_label() {
+        // `blood_oath` is the spec's own example of a multi-word label via underscore.
+        let src = "init:\n    link blood_oath(edmond -- haydee)";
+        let prog = parse_ok(src);
+        let TopLevelDecl::Init(init) = decl(&prog, 0) else { panic!() };
+        assert!(matches!(
+            &init.statements[0].0,
+            Statement::Link(LinkStmt { label, from, to, directed: false })
+                if label == "blood_oath" && from == "edmond" && to == "haydee"
+        ));
+    }
+
+    // ── Rename inside a group's new block ─────────────────────────────────
+
+    #[test]
+    fn parse_rename_inside_group_block() {
+        let src = "group \"S1\":\n    new episode:\n        rename watson: \"Dr. John Watson\"";
+        let prog = parse_ok(src);
+        let TopLevelDecl::Group(grp) = decl(&prog, 0) else { panic!() };
+        assert_eq!(grp.blocks.len(), 1);
+        assert!(matches!(
+            &grp.blocks[0].0.statements[0].0,
+            Statement::Rename(RenameStmt { actor, new_name })
+                if actor == "watson" && new_name == "Dr. John Watson"
+        ));
+    }
+
+    // ── Keyword cannot be used as link label ──────────────────────────────
+
+    #[test]
+    fn parse_error_keyword_as_link_label() {
+        // Keywords lex to dedicated tokens, not Ident — so `link link(a -- b)`
+        // fails because the parser expects Ident after `link` but finds Token::Link.
+        parse_fails("init:\n    link link(a -- b)");
+        parse_fails("init:\n    link actor(a -- b)");
+        parse_fails("init:\n    link deceased(a -- b)");
+    }
+
     // ── Error cases ───────────────────────────────────────────────────────
 
     #[test]
@@ -735,5 +829,23 @@ group "Season 2":
     #[test]
     fn parse_error_rename_missing_colon() {
         parse_fails("new chapter:\n    rename catherine \"New Name\"");
+    }
+
+    #[test]
+    fn parse_error_set_block_missing_type() {
+        // `set block:` with nothing after the colon is a parse error.
+        parse_fails("set block:");
+    }
+
+    #[test]
+    fn parse_error_set_colour_missing_equals() {
+        // `set colour: married` without `= "<hex>"` is a parse error.
+        parse_fails(r#"set colour: married"#);
+    }
+
+    #[test]
+    fn parse_error_new_missing_colon() {
+        // `new chapter` without `:` must fail — the colon is required.
+        parse_fails("new chapter");
     }
 }

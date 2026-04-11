@@ -787,6 +787,90 @@ mod tests {
         assert!(errs.contains(&LexErrorKind::UnknownCharacter));
     }
 
+    // ── Additional indentation error cases ───────────────────────────────
+
+    #[test]
+    fn dedent_to_non_multiple_level_produces_error() {
+        // Dedenting from 8 to 2 (not a multiple of 4) hits InvalidIndentation,
+        // not UnexpectedIndent — the multiple-of-4 check runs first.
+        let src = "group:\n    new:\n        actor\n  set";
+        let errs = errors(src);
+        assert!(
+            errs.iter().any(|e| matches!(e, LexErrorKind::InvalidIndentation { found: 2 })),
+            "expected InvalidIndentation {{ found: 2 }}, got {errs:?}"
+        );
+    }
+
+    // ── Error recovery ────────────────────────────────────────────────────
+
+    #[test]
+    fn lex_recovers_after_unknown_char() {
+        // After an unknown char `@` the lexer should still produce subsequent tokens.
+        let (toks, _) = lex("@ metadata");
+        let errs = errors("@ metadata");
+        assert!(errs.contains(&LexErrorKind::UnknownCharacter));
+        assert!(toks.iter().any(|(t, _)| *t == Token::Metadata), "tokens after error: {toks:?}");
+    }
+
+    #[test]
+    fn lex_multiple_errors_accumulate() {
+        // Two unknown chars → two errors.
+        let errs = errors("@ $");
+        let unknown_count = errs.iter().filter(|e| **e == LexErrorKind::UnknownCharacter).count();
+        assert_eq!(unknown_count, 2, "expected 2 UnknownCharacter errors, got {errs:?}");
+    }
+
+    // ── Additional full-line sequences ────────────────────────────────────
+
+    #[test]
+    fn lex_metadata_media_line() {
+        // `media` is not a keyword — it lexes as Ident. Values book/show/film are also Ident.
+        assert_eq!(
+            tokens("metadata media: book"),
+            vec![
+                Token::Metadata,
+                Token::Ident("media".to_string()),
+                Token::Colon,
+                Token::Ident("book".to_string()),
+            ]
+        );
+        assert_eq!(
+            tokens("metadata media: show"),
+            vec![
+                Token::Metadata,
+                Token::Ident("media".to_string()),
+                Token::Colon,
+                Token::Ident("show".to_string()),
+            ]
+        );
+        assert_eq!(
+            tokens("metadata media: film"),
+            vec![
+                Token::Metadata,
+                Token::Ident("media".to_string()),
+                Token::Colon,
+                Token::Ident("film".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lex_link_with_underscore_label() {
+        // `blood_oath` is a valid link label (from the spec example).
+        assert_eq!(
+            tokens("link blood_oath(edmond -- haydee)"),
+            vec![
+                Token::Link,
+                Token::Ident("blood_oath".to_string()),
+                Token::LParen,
+                Token::Ident("edmond".to_string()),
+                Token::Undirected,
+                Token::Ident("haydee".to_string()),
+                Token::RParen,
+            ]
+        );
+    }
+
     #[test]
     fn lex_produces_no_errors_for_valid_snippet() {
         let src = r#"

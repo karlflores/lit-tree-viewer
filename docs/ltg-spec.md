@@ -542,12 +542,22 @@ group "Season 2":
 
 The compiler performs three passes:
 
-### Pass 1 — Lexing & Parsing
+### Pass 1 — Lexing & Parsing ✅
 Converts raw text into an AST. Produces **syntax errors** (unexpected token, unterminated
 string, bad indentation, etc.).
 
-### Pass 2 — Semantic Analysis (Type Checker)
+Implemented in `ltg-langserver/src/lexer.rs` and `ltg-langserver/src/parser.rs`.
+102 unit tests passing covering all token types, indentation rules, error recovery,
+and every statement and block form.
+
+### Pass 2 — Semantic Analysis (Type Checker) ✅
 Validates the AST against these rules:
+
+Implemented in `ltg-langserver/src/checker.rs`.
+42 unit tests passing covering every named error code and warning in the table below.
+Rules already enforced structurally by the parser (`TopLevelActor`, `TopLevelRename`,
+`ReservedLabel`, `NestedGroup`) and by the lexer (`InvalidIndentation`) are handled
+at those earlier passes rather than here.
 
 | Rule | Error |
 |---|---|
@@ -580,8 +590,15 @@ Each error carries: **error code**, **message**, **severity** (`error` or `warni
 
 Warnings do not prevent compilation — a `CompiledGraph` is still produced. Errors halt compilation at the end of the semantic pass.
 
-### Pass 3 — Compilation
+### Pass 3 — Compilation ✅
 Converts the validated AST into the LitTree domain model:
+
+Implemented in `ltg-langserver/src/compiler.rs`.
+34 unit tests passing covering series fields, sequential block numbering (transparent
+through groups), character `introducedAt`/`diedAt`, rename aliases, relationship
+temporal windows (`endedAt = unlinkBlock - 1`), relink producing a second row,
+and the colour map (FNV-1a hash into a 12-colour Tailwind palette, overridden by
+`set colour:` directives).
 
 - One `Series` record:
   - `title` from `metadata title:`
