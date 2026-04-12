@@ -1,9 +1,10 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Character } from './types/domain'
 import { useGraphData } from './hooks/useGraphData'
 import GraphCanvas from './components/GraphCanvas'
 import TimelineScrubber from './components/TimelineScrubber'
 import CharacterPanel from './components/CharacterPanel'
+import MenuPanel from './components/MenuPanel'
 import Toggle from './components/Toggle'
 
 const SERIES_ID = '00000000-0000-0000-0000-000000000001'
@@ -19,14 +20,72 @@ export default function App() {
   const [panelCharacter, setPanelCharacter] = useState<Character | null>(null)
   const [panelOpen, setPanelOpen]           = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openRafRef    = useRef<number | null>(null)
+
+  const [menuMounted, setMenuMounted] = useState(false)
+  const [menuOpen, setMenuOpen]       = useState(false)
+  const menuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const menuOpenRafRef    = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current)      clearTimeout(closeTimerRef.current)
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current)
+      if (menuCloseTimerRef.current)  clearTimeout(menuCloseTimerRef.current)
+      if (menuOpenRafRef.current !== null) cancelAnimationFrame(menuOpenRafRef.current)
+    }
+  }, [])
+
+  const handleCloseMenu = useCallback(() => {
+    if (menuOpenRafRef.current !== null) {
+      cancelAnimationFrame(menuOpenRafRef.current)
+      menuOpenRafRef.current = null
+    }
+    setMenuOpen(false)
+    menuCloseTimerRef.current = setTimeout(() => setMenuMounted(false), PANEL_CLOSE_MS)
+  }, [])
+
+  const handleToggleMenu = useCallback(() => {
+    if (menuCloseTimerRef.current) clearTimeout(menuCloseTimerRef.current)
+    if (menuOpenRafRef.current !== null) {
+      cancelAnimationFrame(menuOpenRafRef.current)
+      menuOpenRafRef.current = null
+    }
+
+    if (!menuMounted) {
+      // Not yet mounted — mount then open on next frame so the translate
+      // transition fires from the closed position.
+      setMenuMounted(true)
+      menuOpenRafRef.current = requestAnimationFrame(() => {
+        menuOpenRafRef.current = null
+        setMenuOpen(true)
+      })
+    } else if (menuOpen) {
+      // Currently open — animate closed then unmount.
+      setMenuOpen(false)
+      menuCloseTimerRef.current = setTimeout(() => setMenuMounted(false), PANEL_CLOSE_MS)
+    } else {
+      // Mounted but mid-close animation — reverse back to open.
+      setMenuOpen(true)
+    }
+  }, [menuMounted, menuOpen])
 
   const handleSelectCharacter = useCallback((character: Character | null) => {
+    // Cancel any in-flight open RAF so a close that arrives before the next
+    // frame doesn't get overridden by a stale setPanelOpen(true).
+    if (openRafRef.current !== null) {
+      cancelAnimationFrame(openRafRef.current)
+      openRafRef.current = null
+    }
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
 
     if (character) {
       setPanelCharacter(character)
       // Defer open so the panel mounts at translate-x-full before transitioning in.
-      requestAnimationFrame(() => setPanelOpen(true))
+      openRafRef.current = requestAnimationFrame(() => {
+        openRafRef.current = null
+        setPanelOpen(true)
+      })
     } else {
       setPanelOpen(false)
       closeTimerRef.current = setTimeout(() => setPanelCharacter(null), PANEL_CLOSE_MS)
@@ -79,6 +138,9 @@ export default function App() {
             selectedCharacterId={panelCharacter?.id ?? null}
             showDeceased={showDeceased}
             onSelectCharacter={handleSelectCharacter}
+            menuOpen={menuOpen}
+            onToggleMenu={handleToggleMenu}
+            onCloseMenu={handleCloseMenu}
           />
         </div>
 
@@ -93,13 +155,27 @@ export default function App() {
             onClose={() => handleSelectCharacter(null)}
           />
         )}
-      </div>
 
-      <TimelineScrubber
-        series={series}
-        currentUnit={currentUnit}
-        onChange={setCurrentUnit}
-      />
+        {menuMounted && (
+          <MenuPanel
+            isOpen={menuOpen}
+            onClose={handleCloseMenu}
+          />
+        )}
+
+        <div
+          className={[
+            'absolute bottom-4 left-3 right-3 z-10 transition-opacity duration-[250ms]',
+            (panelOpen || menuOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
+          ].join(' ')}
+        >
+          <TimelineScrubber
+            series={series}
+            currentUnit={currentUnit}
+            onChange={setCurrentUnit}
+          />
+        </div>
+      </div>
     </div>
   )
 }

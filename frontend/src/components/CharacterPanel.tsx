@@ -24,12 +24,12 @@ const CharacterPanel = memo(({ character, relationships, allCharacters, series, 
   return (
     <aside
       className={[
-        'absolute right-0 top-0 h-full w-72 bg-panel border-l border-border flex flex-col overflow-y-auto',
+        'absolute right-3 top-4 bottom-4 w-72 bg-panel border border-border rounded-3xl shadow-xl flex flex-col overflow-hidden',
         'transition-transform duration-[250ms] ease-in-out',
-        isOpen ? 'translate-x-0' : 'translate-x-full',
+        isOpen ? 'translate-x-0' : 'translate-x-[calc(100%+1rem)]',
       ].join(' ')}
     >
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <span className="text-sm font-semibold text-white truncate">{character.name}</span>
         <button
           onClick={onClose}
@@ -40,6 +40,7 @@ const CharacterPanel = memo(({ character, relationships, allCharacters, series, 
         </button>
       </div>
 
+      <div className="flex flex-col flex-1 overflow-y-auto">
       <div className="flex flex-col items-center gap-2 pt-6 pb-4 px-4">
         <div className={[
           'w-16 h-16 rounded-full flex items-center justify-center text-xl font-semibold',
@@ -92,6 +93,7 @@ const CharacterPanel = memo(({ character, relationships, allCharacters, series, 
           </ul>
         </div>
       )}
+      </div>
     </aside>
   )
 })

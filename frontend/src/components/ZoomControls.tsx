@@ -58,11 +58,11 @@ const ZoomControls = () => {
   }, [nodes, edges, setCenter, getZoom])
 
   return (
-    <Panel position="bottom-right">
+    <Panel position="top-right">
       <div className="flex flex-col gap-2 items-stretch">
 
         {/* Center on largest subgraph */}
-        <div className="flex flex-col rounded-2xl border border-border bg-panel shadow-xl overflow-hidden">
+        <div className="flex flex-col rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
           <button
             onClick={handleCenterLargest}
             aria-label="Center on largest group"
@@ -79,7 +79,7 @@ const ZoomControls = () => {
         </div>
 
         {/* Zoom in / out */}
-        <div className="flex flex-col rounded-2xl border border-border bg-panel shadow-xl overflow-hidden">
+        <div className="flex flex-col rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
           <button
             onClick={() => zoomIn({ duration: 200 })}
             aria-label="Zoom in"
