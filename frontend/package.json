@@ -14,6 +14,7 @@
     "@dagrejs/dagre": "^3.0.0",
     "@tanstack/react-query": "^5.56.0",
     "@xyflow/react": "^12.3.0",
+    "codemirror": "^6.0.2",
     "neverthrow": "^8.0.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",

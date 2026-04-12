@@ -5,6 +5,7 @@ import GraphCanvas from './components/GraphCanvas'
 import TimelineScrubber from './components/TimelineScrubber'
 import CharacterPanel from './components/CharacterPanel'
 import MenuPanel from './components/MenuPanel'
+import CodeEditorPanel from './components/CodeEditorPanel'
 import Toggle from './components/Toggle'
 
 const SERIES_ID = '00000000-0000-0000-0000-000000000001'
@@ -27,12 +28,20 @@ export default function App() {
   const menuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const menuOpenRafRef    = useRef<number | null>(null)
 
+  const [editorMounted, setEditorMounted] = useState(false)
+  const [editorOpen, setEditorOpen]       = useState(false)
+  const editorCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const editorOpenRafRef    = useRef<number | null>(null)
+
+  // Cancel all pending timers and RAFs on unmount (StrictMode / HMR safety).
   useEffect(() => {
     return () => {
-      if (closeTimerRef.current)      clearTimeout(closeTimerRef.current)
-      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current)
-      if (menuCloseTimerRef.current)  clearTimeout(menuCloseTimerRef.current)
-      if (menuOpenRafRef.current !== null) cancelAnimationFrame(menuOpenRafRef.current)
+      if (closeTimerRef.current)              clearTimeout(closeTimerRef.current)
+      if (openRafRef.current !== null)         cancelAnimationFrame(openRafRef.current)
+      if (menuCloseTimerRef.current)          clearTimeout(menuCloseTimerRef.current)
+      if (menuOpenRafRef.current !== null)     cancelAnimationFrame(menuOpenRafRef.current)
+      if (editorCloseTimerRef.current)        clearTimeout(editorCloseTimerRef.current)
+      if (editorOpenRafRef.current !== null)   cancelAnimationFrame(editorOpenRafRef.current)
     }
   }, [])
 
@@ -69,6 +78,36 @@ export default function App() {
       setMenuOpen(true)
     }
   }, [menuMounted, menuOpen])
+
+  const handleCloseEditor = useCallback(() => {
+    if (editorOpenRafRef.current !== null) {
+      cancelAnimationFrame(editorOpenRafRef.current)
+      editorOpenRafRef.current = null
+    }
+    setEditorOpen(false)
+    editorCloseTimerRef.current = setTimeout(() => setEditorMounted(false), PANEL_CLOSE_MS)
+  }, [])
+
+  const handleOpenEditor = useCallback(() => {
+    // Close menu first so it slides out while the editor slides in.
+    handleCloseMenu()
+
+    if (editorCloseTimerRef.current) clearTimeout(editorCloseTimerRef.current)
+    if (editorOpenRafRef.current !== null) {
+      cancelAnimationFrame(editorOpenRafRef.current)
+      editorOpenRafRef.current = null
+    }
+
+    if (!editorMounted) {
+      setEditorMounted(true)
+      editorOpenRafRef.current = requestAnimationFrame(() => {
+        editorOpenRafRef.current = null
+        setEditorOpen(true)
+      })
+    } else {
+      setEditorOpen(true)
+    }
+  }, [editorMounted, handleCloseMenu])
 
   const handleSelectCharacter = useCallback((character: Character | null) => {
     // Cancel any in-flight open RAF so a close that arrives before the next
@@ -160,13 +199,21 @@ export default function App() {
           <MenuPanel
             isOpen={menuOpen}
             onClose={handleCloseMenu}
+            onOpenEditor={handleOpenEditor}
+          />
+        )}
+
+        {editorMounted && (
+          <CodeEditorPanel
+            isOpen={editorOpen}
+            onClose={handleCloseEditor}
           />
         )}
 
         <div
           className={[
             'absolute bottom-4 left-3 right-3 z-10 transition-opacity duration-[250ms]',
-            (panelOpen || menuOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
+            (panelOpen || menuOpen || editorOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
           ].join(' ')}
         >
           <TimelineScrubber
