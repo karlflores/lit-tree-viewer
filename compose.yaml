@@ -16,5 +16,16 @@ services:
       timeout: 5s
       retries: 5
 
+  ltg-langserver:
+    build:
+      context: .
+      dockerfile: ltg-langserver/Dockerfile
+    environment:
+      LTG_HTTP_ADDR: "0.0.0.0:4000"
+    ports:
+      # HTTP companion (POST /compile, GET /health) and WebSocket LSP (GET /ws).
+      # The stdio LSP transport is not exposed here; use GET /ws from the browser.
+      - "4000:4000"
+
 volumes:
   postgres_data:

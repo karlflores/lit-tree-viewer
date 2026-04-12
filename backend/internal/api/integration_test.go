@@ -54,9 +54,9 @@ func TestMain(m *testing.M) {
 // ── fixtures ──────────────────────────────────────────────────────────────────
 //
 // Series: apiSeriesID — "API Test Series", 10 chapters
-// charA: introduced_at=1
+// charA: introduced_at=1, renamed to "API Char A Renamed" at unit 3
 // charB: introduced_at=5
-// relationship: charA ↔ charB, ally, introduced_at=5
+// relationship: charA ↔ charB, ally, label="ally", introduced_at=5
 
 func insertAPIFixtures(ctx context.Context, pool *pgxpool.Pool) {
 	mustExec(ctx, pool, `
@@ -74,8 +74,14 @@ func insertAPIFixtures(ctx context.Context, pool *pgxpool.Pool) {
 	`, apiCharAID, apiCharBID, apiSeriesID)
 
 	mustExec(ctx, pool, `
-		INSERT INTO relationships (series_id, from_id, to_id, kind, directed, introduced_at)
-		VALUES ($1, $2, $3, 'ally', false, 5)
+		INSERT INTO character_renames (character_id, series_id, name, introduced_at)
+		VALUES ($1, $2, 'API Char A Renamed', 3)
+		ON CONFLICT DO NOTHING
+	`, apiCharAID, apiSeriesID)
+
+	mustExec(ctx, pool, `
+		INSERT INTO relationships (series_id, from_id, to_id, kind, label, directed, introduced_at)
+		VALUES ($1, $2, $3, 'ally', 'ally', false, 5)
 	`, apiSeriesID, apiCharAID, apiCharBID)
 }
 
@@ -218,8 +224,8 @@ func TestIntegration_GetGraphSnapshot_Unit5(t *testing.T) {
 	if len(got.Relationships) != 1 {
 		t.Errorf("want 1 relationship at unit 5, got %d", len(got.Relationships))
 	}
-	if got.Relationships[0].Kind != domain.KindAlly {
-		t.Errorf("relationship kind: want ally, got %s", got.Relationships[0].Kind)
+	if got.Relationships[0].Label != "ally" {
+		t.Errorf("relationship label: want ally, got %s", got.Relationships[0].Label)
 	}
 }
 
@@ -282,6 +288,56 @@ func TestIntegration_GetGraphSnapshot_SeriesEmbedded(t *testing.T) {
 	}
 	if got.Series.Title != "API Test Series" {
 		t.Errorf("embedded series title: want %q, got %q", "API Test Series", got.Series.Title)
+	}
+}
+
+// ── character renames ─────────────────────────────────────────────────────────
+
+func TestIntegration_GetGraphSnapshot_CharNameBeforeRename(t *testing.T) {
+	// At unit 2: charA has not yet been renamed (rename is at unit 3)
+	w := apiDo(t, "GET", "/api/series/"+apiSeriesID.String()+"/graph?at=2")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", w.Code, w.Body)
+	}
+
+	var got domain.GraphSnapshot
+	decodeJSON(t, w.Body.Bytes(), &got)
+
+	if len(got.Characters) != 1 {
+		t.Fatalf("want 1 character at unit 2, got %d", len(got.Characters))
+	}
+	if got.Characters[0].Name != "API Char A" {
+		t.Errorf("name before rename: want %q, got %q", "API Char A", got.Characters[0].Name)
+	}
+}
+
+func TestIntegration_GetGraphSnapshot_CharNameAfterRename(t *testing.T) {
+	// At unit 5: charA has been renamed at unit 3
+	w := apiDo(t, "GET", "/api/series/"+apiSeriesID.String()+"/graph?at=5")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", w.Code, w.Body)
+	}
+
+	var got domain.GraphSnapshot
+	decodeJSON(t, w.Body.Bytes(), &got)
+
+	var charA *domain.Character
+	for i := range got.Characters {
+		if got.Characters[i].ID == apiCharAID {
+			charA = &got.Characters[i]
+			break
+		}
+	}
+	if charA == nil {
+		t.Fatal("charA not found in response")
+	}
+	if charA.Name != "API Char A Renamed" {
+		t.Errorf("name after rename: want %q, got %q", "API Char A Renamed", charA.Name)
+	}
+	if len(charA.Renames) != 1 {
+		t.Errorf("want 1 rename entry, got %d", len(charA.Renames))
 	}
 }
 

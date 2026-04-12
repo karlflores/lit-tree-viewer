@@ -20,15 +20,22 @@ export type CharacterState =
   | { readonly status: 'active' }
   | { readonly status: 'deceased'; readonly diedAt: number }
 
+export type CharacterRename = Readonly<{
+  name: string
+  introducedAt: number
+}>
+
 export type Character = Readonly<{
   id: string
   seriesId: string
-  name: string
+  name: string                          // effective display name at the queried unit (server-resolved)
   aliases: readonly string[]
+  renames?: readonly CharacterRename[]  // history up to the queried unit; absent if no renames
   description: string | null
   imageUrl: string | null
   introducedAt: number
   diedAt: number | null
+  ltgIdentifier?: string                // present only for LTG-imported characters
 }>
 
 export const getCharacterState = (character: Character, atUnit: number): CharacterState => {
@@ -65,8 +72,8 @@ export type Relationship = Readonly<{
   seriesId: string
   fromId: string
   toId: string
-  kind: RelationshipKind
-  label: string | null
+  kind?: RelationshipKind   // absent for LTG-imported relationships; use label for styling
+  label: string             // canonical identifier; always present after migration 002
   directed: boolean
   introducedAt: number
   endedAt: number | null

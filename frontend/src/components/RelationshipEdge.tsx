@@ -9,8 +9,8 @@ import type { RelationshipKind } from '../types/domain'
 import { getEdgeStyle } from '../lib/edgeStyles'
 
 export type RelationshipEdgeData = {
-  kind: RelationshipKind
-  label: string | null
+  kind?: RelationshipKind   // absent for LTG-imported relationships
+  label: string
   directed: boolean
 }
 
@@ -21,7 +21,7 @@ const RelationshipEdge = memo((props: EdgeProps) => {
   } = props
 
   const edgeData = data as RelationshipEdgeData
-  const style = getEdgeStyle(edgeData.kind)
+  const style = getEdgeStyle(edgeData.kind, edgeData.label)
 
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX, sourceY, sourcePosition,
