@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Character } from './types/domain'
 import { useGraphData } from './hooks/useGraphData'
 import GraphCanvas from './components/GraphCanvas'
@@ -26,6 +26,15 @@ export default function App() {
   const [menuOpen, setMenuOpen]       = useState(false)
   const menuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const menuOpenRafRef    = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current)      clearTimeout(closeTimerRef.current)
+      if (openRafRef.current !== null) cancelAnimationFrame(openRafRef.current)
+      if (menuCloseTimerRef.current)  clearTimeout(menuCloseTimerRef.current)
+      if (menuOpenRafRef.current !== null) cancelAnimationFrame(menuOpenRafRef.current)
+    }
+  }, [])
 
   const handleCloseMenu = useCallback(() => {
     if (menuOpenRafRef.current !== null) {
@@ -156,7 +165,7 @@ export default function App() {
 
         <div
           className={[
-            'absolute bottom-4 left-3 right-3 z-10 transition-opacity duration-250',
+            'absolute bottom-4 left-3 right-3 z-10 transition-opacity duration-[250ms]',
             (panelOpen || menuOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
           ].join(' ')}
         >

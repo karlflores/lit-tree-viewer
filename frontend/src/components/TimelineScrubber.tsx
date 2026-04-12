@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Series } from '../types/domain'
 
 type Props = {
@@ -26,6 +26,14 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
   const trackRef      = useRef<HTMLDivElement>(null)
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clear pending timers on unmount to prevent setState calls after unmount.
+  useEffect(() => {
+    return () => {
+      if (pressTimerRef.current) clearTimeout(pressTimerRef.current)
+      if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
+    }
+  }, [])
 
   const [rawProgress, setRawProgress]           = useState<number | null>(null)
   const [pressPreviewUnit, setPressPreviewUnit] = useState<number | null>(null)
@@ -90,6 +98,13 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
   }, [currentUnit, totalUnits])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // Cancel the hover-ready timer — drag takes over, no need to show the
+    // delayed label via the hover path.
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current)
+      hoverTimerRef.current = null
+    }
+    setHoverReady(false)
     e.currentTarget.setPointerCapture(e.pointerId)
     setRawProgress(progressFromClientX(e.clientX))
   }, [progressFromClientX])
@@ -108,9 +123,17 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
 
   const handleTrackMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
-    setHoverUnit(unitFromClientX(e.clientX))
+    const track = trackRef.current
+    if (track) {
+      const { left, right } = track.getBoundingClientRect()
+      if (e.clientX < left || e.clientX > right) {
+        setHoverUnit(currentUnit)
+      } else {
+        setHoverUnit(unitFromClientX(e.clientX))
+      }
+    }
     hoverTimerRef.current = setTimeout(() => setHoverReady(true), HOVER_DELAY_MS)
-  }, [unitFromClientX])
+  }, [unitFromClientX, currentUnit])
 
   const handleTrackMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const track = trackRef.current

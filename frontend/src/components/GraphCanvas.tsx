@@ -171,8 +171,8 @@ const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelec
 
   const onPaneClick = useCallback(() => {
     onSelectCharacter(null)
-    onCloseMenu()
-  }, [onSelectCharacter, onCloseMenu])
+    if (menuOpen) onCloseMenu()
+  }, [onSelectCharacter, onCloseMenu, menuOpen])
 
   return (
     <ReactFlow
