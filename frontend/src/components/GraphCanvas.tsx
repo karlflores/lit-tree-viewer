@@ -3,6 +3,7 @@ import {
   applyNodeChanges,
   Background,
   MarkerType,
+  Panel,
   ReactFlow,
   type Edge,
   type Node,
@@ -59,9 +60,12 @@ type Props = {
   selectedCharacterId: string | null
   showDeceased: boolean
   onSelectCharacter: (character: Character | null) => void
+  menuOpen: boolean
+  onToggleMenu: () => void
+  onCloseMenu: () => void
 }
 
-const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelectCharacter }: Props) => {
+const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onToggleMenu, onCloseMenu }: Props) => {
   const { characters, relationships, atUnit } = snapshot
 
   const visibleCharacters = useMemo(
@@ -157,11 +161,18 @@ const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelec
   }, [])
 
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
-    const character = characters.find(c => c.id === node.id) ?? null
-    onSelectCharacter(character)
-  }, [characters, onSelectCharacter])
+    if (node.id === selectedCharacterId) {
+      onSelectCharacter(null)
+    } else {
+      const character = characters.find(c => c.id === node.id) ?? null
+      onSelectCharacter(character)
+    }
+  }, [characters, selectedCharacterId, onSelectCharacter])
 
-  const onPaneClick = useCallback(() => onSelectCharacter(null), [onSelectCharacter])
+  const onPaneClick = useCallback(() => {
+    onSelectCharacter(null)
+    onCloseMenu()
+  }, [onSelectCharacter, onCloseMenu])
 
   return (
     <ReactFlow
@@ -179,6 +190,21 @@ const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelec
       proOptions={{ hideAttribution: true }}
     >
       <Background color="#2a2d3a" gap={24} size={1} />
+      {!menuOpen && (
+        <Panel position="top-left">
+          <div className="rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
+            <button
+              onClick={onToggleMenu}
+              aria-label="Open menu"
+              className="w-11 h-11 flex flex-col items-center justify-center gap-[4px] text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
+            >
+              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
+              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
+              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
+            </button>
+          </div>
+        </Panel>
+      )}
       <ZoomControls />
     </ReactFlow>
   )
