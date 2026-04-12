@@ -11,7 +11,6 @@ const DOT_SIZE          = 6
 const CURSOR_SIZE_REST  = 14
 const CURSOR_SIZE_HOVER = 20   // larger, invites interaction
 const CURSOR_SIZE_DRAG  = 16   // smaller than hover — snaps into active feel
-const TRACK_HEIGHT      = 20
 const HOVER_DELAY_MS    = 300
 
 const CURSOR_COLOR_REST  = '#4ade80'  // saturated green
