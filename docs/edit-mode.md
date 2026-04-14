@@ -14,8 +14,8 @@
   saves to the backend. There is no auto-save or draft sync.
 - **Independent of the backend API.** The edit model lives entirely in the frontend
   for now. A future `POST /api/series` + `POST /api/import` endpoint will persist it.
-- **Non-destructive entry.** Entering edit mode on an existing graph does not alter
-  the viewed graph. "New Graph" always starts a blank canvas.
+- **Non-destructive entry.** Entering edit mode snapshots the viewed graph into
+  editable state; exiting restores the viewer without altering the source data.
 - **Chapter-scoped mutations.** Every canvas action (add node, draw relationship,
   mark deceased) is applied at the currently selected chapter. The timeline scrubber
   remains active in edit mode.
@@ -28,69 +28,61 @@
 |---|---|---|
 | **View mode** | Default on load | Backend API |
 | **Editor view mode** | "Open in Editor" → Render | LTG compiler (`CompileSuccess`) |
-| **Edit mode (existing)** | "Edit Mode" button *(future)* | Current snapshot (read from backend) |
-| **Edit mode (new graph)** | "New Graph" button | Empty `EditableGraph` in `sessionStorage` |
-
-For Phase 6 (this document), only the **new graph** path is in scope. Editing an
-existing backend graph requires a `GET /api/series/:id/export` round-trip that is
-deferred to a later phase.
+| **Edit mode (existing)** | "Edit Mode" button | Current `layoutSnapshot` merged with `currentUnit` snapshot |
+| **Edit mode (new graph)** | "New Graph" button | Empty `GraphSnapshot` in `sessionStorage` |
 
 ---
 
 ## Data Model
 
-### `EditableGraph`
-
-A flat, self-contained representation that lives purely in the frontend. It is
-structurally equivalent to the backend domain model but uses client-generated IDs
-and does not require a backend round-trip to create.
+Edit mode reuses the existing domain types — no separate `EditableGraph` type exists.
+The editable state is a plain `GraphSnapshot` held in `App.tsx` state and persisted
+to `sessionStorage`.
 
 ```typescript
-type EditableGraph = {
-  id:            string           // 'edit:<nanoid>' — never a real UUID
-  title:         string
-  mediaType:     MediaType        // 'book' | 'show' | 'film'
-  unitLabel:     string           // 'Chapter' | 'Episode' | 'Part'
-  totalUnits:    number           // grows as chapters are added
-  characters:    EditableCharacter[]
-  relationships: EditableRelationship[]
-}
-
-type EditableCharacter = {
-  id:           string            // 'char:<nanoid>'
-  name:         string
-  aliases:      string[]
-  description:  string | null
-  imageUrl:     string | null
-  introducedAt: number            // chapter this character was added in edit mode
-  diedAt:       number | null
-}
-
-type EditableRelationship = {
-  id:           string            // 'rel:<nanoid>'
-  fromId:       string
-  toId:         string
-  label:        string
-  kind?:        RelationshipKind
-  directed:     boolean
-  introducedAt: number
-  endedAt:      number | null
+// From src/types/domain.ts — same type used for both viewer and edit mode
+type GraphSnapshot = {
+  series:        Series
+  characters:    readonly Character[]
+  relationships: readonly Relationship[]
+  atUnit:        number
+  colours?:      Readonly<Record<string, string>>
 }
 ```
 
-`EditableGraph` converts to a `GraphSnapshot` via `editableToSnapshot(graph, atUnit)`
-— structurally identical to `compiledToSnapshot` but for this lighter type.
+The key difference from a viewer snapshot: the edit graph stores **all characters and
+relationships across all time**, not just those active at a single chapter.
+`editableToSnapshot(graph, atUnit)` applies the temporal filter on demand.
+
+For new nodes and relationships added in edit mode, IDs are generated client-side
+using `crypto.randomUUID()`.
 
 ### Session Storage
 
-Key: `litree:edit-graph`  
-Value: `JSON.stringify(EditableGraph)`
+Key: `litree:edit-graph`
+Value: `JSON.stringify(GraphSnapshot)`
 
 Helpers in `src/lib/editGraphSession.ts`:
+- `createEmptyGraph()` — returns a blank `GraphSnapshot` with a generated `edit:<uuid>` series ID, `totalUnits: 1`, no characters
 - `saveEditGraph(graph)` — write to sessionStorage
-- `loadEditGraph()` — read and parse; returns `null` on miss or parse error
+- `loadEditGraph()` — read and parse; validates `graph.series` is present to reject stale pre-refactor data; returns `null` on miss, parse error, or invalid shape
 - `clearEditGraph()` — remove the key
-- `createEmptyGraph()` — factory for a blank graph (`totalUnits: 1`, no characters)
+
+### `editableToSnapshot`
+
+`src/lib/editableToSnapshot.ts` — takes the full edit `GraphSnapshot` and a target
+`atUnit`, returns a filtered snapshot using the same temporal rules as
+`compiledToSnapshot`:
+
+```typescript
+export function editableToSnapshot(graph: GraphSnapshot, atUnit: number): GraphSnapshot
+```
+
+- Characters whose `introducedAt > atUnit` are excluded
+- Relationships whose `introducedAt > atUnit` are excluded
+- Relationships whose `endedAt < atUnit` are excluded
+- Relationships referencing an absent character are excluded
+- `atUnit` is clamped to `[1, series.totalUnits]`
 
 ---
 
@@ -98,15 +90,10 @@ Helpers in `src/lib/editGraphSession.ts`:
 
 ### Viewer Toolbar (view mode)
 
-Two buttons are added below "Edit Mode":
-
 | Button | Action |
 |---|---|
-| **Edit Mode** *(existing)* | Toggle `editMode` on the current backend graph *(future)* |
-| **New Graph** | Create a blank `EditableGraph`, enter edit mode |
-
-"New Graph" is always available. It starts a completely fresh canvas regardless of
-what is currently displayed.
+| **Edit Mode** | Snapshot the current graph into editable state and enter edit mode; if already in edit mode, exits and restores the viewer |
+| **New Graph** | Create a blank edit graph (`createEmptyGraph`), enter edit mode |
 
 ### Header — Editable Title
 
@@ -116,10 +103,11 @@ When in edit mode the series title in the header becomes an inline `<input>`:
 ◈ LitTree  ·  [___ Untitled ___]           Chapter 1
 ```
 
-- Placeholder text: `"Untitled"`
-- Clicking outside or pressing Enter/Escape commits the value
-- Updates `editGraph.title` in state (and re-saves to sessionStorage)
-- The `·` separator and chapter indicator remain unchanged
+- Controlled input bound to `editGraph.series.title`
+- On focus: stores the current title in a ref (for Escape revert)
+- On change: updates `editGraph.series` in state
+- On blur / Enter: commits; resets to `"Untitled"` if empty; saves to sessionStorage
+- On Escape: reverts to the stored pre-edit value; saves; blurs
 
 ### Edit Toolbar (replaces viewer toolbar in edit mode)
 
@@ -136,7 +124,7 @@ All three buttons use the existing `ToolbarButton` component (pill shape, hover-
 
 ### Canvas in Edit Mode
 
-- **Empty state**: when `editGraph.characters` is empty, show a centred hint:  
+- **Empty state**: when `editGraph.characters` is empty, show a centred hint:
   `"Click New Node to add your first character"`
 - **Node dragging**: unchanged — users can reposition nodes freely
 - **New node placement**: nodes are placed at the centre of the current viewport
@@ -147,10 +135,8 @@ All three buttons use the existing `ToolbarButton` component (pill shape, hover-
 ### Timeline in Edit Mode
 
 For a new graph, `totalUnits = 1` so the scrubber shows a single chapter.
-
-The scrubber remains functional: `currentUnit` can be changed, which affects which
-chapter future node-add and relationship-draw operations target. "Add Chapter"
-functionality (incrementing `totalUnits`) is a **Phase 6.2** feature.
+The scrubber remains functional and drives `currentUnit`, which scopes future
+node-add and relationship-draw operations.
 
 ---
 
@@ -158,82 +144,104 @@ functionality (incrementing `totalUnits`) is a **Phase 6.2** feature.
 
 ```
 App.tsx state
-  editMode: boolean            — true when in edit mode
-  editGraph: EditableGraph | null  — non-null only while in edit mode
+  editMode:  boolean              — true when in edit mode
+  editGraph: GraphSnapshot | null — non-null only while in edit mode
 
-  snapshot (derived):
-    if editGraph != null      → editableToSnapshot(editGraph, currentUnit)
-    else if localGraph != null → compiledToSnapshot(localGraph, currentUnit)
-    else                       → graphData.snapshot (backend)
-
-  layoutSnapshot (derived):
-    same priority, always at totalUnits
+  Snapshot derivation (both display and layout):
+    if editMode && editGraph != null → editableToSnapshot(editGraph, atUnit)
+    else if localGraph != null       → compiledToSnapshot(localGraph, atUnit)
+    else                             → backend graphData snapshot
 ```
 
-When `editGraph` is set, the backend graph data is still fetched in the background
-(React Query cache) but not displayed. Exiting edit mode restores the view.
+### Data queries (mount-time, parallel)
+
+Three queries fire on mount and are cached indefinitely (`staleTime: Infinity`):
+
+| Hook | Endpoint | Purpose |
+|---|---|---|
+| `useGraphData(id, currentUnit)` | `GET /graph?at=N` | Current chapter display; prefetches all units |
+| `useFullGraph(id)` | `GET /graph/full` | Layout positions + edit mode base |
+| `useCompiledGraph(id)` | `GET /compiled` | LTG source emission for "Open in Editor" |
+
+### Entering edit mode (`handleToggleEditMode`)
+
+The "Edit Mode" button calls `handleToggleEditMode`, which uses `fullGraphData.snapshot`
+(from `useFullGraph`) as the edit base. Because `GET /graph/full` returns all
+characters and all relationships with no temporal filtering, no ended relationships
+are silently dropped — the full history is available from the first render.
+
+Falls back to `layoutSnapshot` if `fullGraphData` hasn't resolved yet (should
+be rare since all three queries fire in parallel on mount).
+
+### Snapshot priority gating
+
+Both `editableSnapshot` and `fullEditableSnapshot` are gated on
+`editMode && editGraph !== null`. Toggling the "Edit Mode" button off immediately
+drops the edit snapshot and falls through to `localGraph` / backend data, without
+needing to clear `editGraph` from state first.
+
+### Session resume
+
+On mount, `loadEditGraph()` checks sessionStorage. If a valid `GraphSnapshot` is
+found (validated by the presence of a `series` field), the app restores
+`editGraph`, sets `editMode = true`, and resets `currentUnit = 1`. Stale
+pre-refactor data (old flat `EditableGraph` shape) is automatically discarded.
 
 ---
 
 ## Phased Task Breakdown (Phase 6)
 
-### 6.1 — Data Model & Session Helpers *(implement first)*
-- [ ] Create `src/types/editGraph.ts` with `EditableGraph`, `EditableCharacter`, `EditableRelationship`
-- [ ] Create `src/lib/editGraphSession.ts`: `createEmptyGraph`, `saveEditGraph`, `loadEditGraph`, `clearEditGraph`
-- [ ] Create `src/lib/editableToSnapshot.ts`: pure function `editableToSnapshot(graph, atUnit) → GraphSnapshot`
-- [ ] Unit-test `editableToSnapshot`: empty graph, single character, character with diedAt, relationship visibility
+### 6.1 — Data Model & Session Helpers ✅
+- [x] ~~`src/types/editGraph.ts`~~ — removed after type consolidation; domain types used directly
+- [x] `src/lib/editGraphSession.ts`: `createEmptyGraph`, `saveEditGraph`, `loadEditGraph`, `clearEditGraph`
+- [x] `src/lib/editableToSnapshot.ts`: `editableToSnapshot(graph: GraphSnapshot, atUnit) → GraphSnapshot`
+- [x] Unit-test `editableToSnapshot`: empty graph, character filtering, diedAt, relationship filtering, field mapping, optional kind
 
-### 6.2 — App-Level State & Snapshot Derivation
-- [ ] Add `editGraph: EditableGraph | null` state to `App.tsx`
-- [ ] Add `handleNewGraph()`: create empty graph, set `editGraph`, set `editMode = true`, reset `currentUnit = 1`
-- [ ] Add `handleSaveGraph()`: call `saveEditGraph(editGraph)`, emit a "Saved" toast notification
-- [ ] Add `handleExitEdit()`: clear `editGraph` from state (keep sessionStorage), set `editMode = false`
-- [ ] Update snapshot derivation: `editGraph` takes highest priority over `localGraph` and backend data
-- [ ] Load any in-progress edit graph from sessionStorage on mount (resume an interrupted session)
+### 6.2 — App-Level State & Snapshot Derivation ✅
+- [x] Add `editGraph: GraphSnapshot | null` state to `App.tsx`
+- [x] Add `handleNewGraph()`: create empty graph, set `editMode = true`, reset `currentUnit = 1`
+- [x] Add `handleSaveGraph()`: call `saveEditGraph(editGraph)`, emit a "Saved" toast
+- [x] Add `handleExitEdit()`: clear `editGraph` from state (keep sessionStorage), set `editMode = false`
+- [x] Snapshot derivation gated on `editMode && editGraph !== null` (not just `editGraph !== null`)
+- [x] Resume in-progress edit session from sessionStorage on mount
+- [x] `handleToggleEditMode`: uses `fullGraphData.snapshot` (all relationships) as edit base; calls `handleExitEdit` on exit
+- [x] `useFullGraph` hook — `GET /graph/full`, single fetch, `staleTime: Infinity`; replaces second `useGraphData` call and the merge workaround
+- [x] `useCompiledGraph` hook — `GET /compiled`, single fetch, `staleTime: Infinity`; makes "Open in Editor" instant (no click-time request)
 
-### 6.3 — "New Graph" Button in Viewer Toolbar
-- [ ] Add "New Graph" `ToolbarButton` to `SideToolbar` in `App.tsx` (below "Edit Mode")
-- [ ] Wire `onClick` to `handleNewGraph`
-- [ ] Icon: a blank canvas / document icon
+### 6.3 — "New Graph" Button in Viewer Toolbar ✅
+- [x] Add "New Graph" `ToolbarButton` to `SideToolbar` in `App.tsx` (below "Edit Mode")
+- [x] Wire `onClick` to `handleNewGraph`
+- [x] Icon: document with `+` badge
 
-### 6.4 — Editable Title in Header
-- [ ] When `editMode && editGraph != null`, render an `<input>` instead of the `<span>` for the series title
-- [ ] Style: transparent background, white text, subtle underline or border-bottom on focus, same font as the span
-- [ ] On change: update `editGraph.title` in state
-- [ ] On blur / Enter / Escape: commit value; if empty, reset to `"Untitled"`
+### 6.4 — Editable Title in Header ✅
+- [x] When `editMode && editGraph != null`, render `<input>` instead of `<span>` for series title
+- [x] Transparent background, white text, `border-b border-white/30` on focus
+- [x] On change: update `editGraph.series.title` in state
+- [x] On blur / Enter: commit; reset to `"Untitled"` if empty; save to sessionStorage
+- [x] On Escape: revert to pre-focus value via `titleBeforeEditRef`; save; blur
 
 ### 6.5 — Edit Toolbar
 - [ ] Create `src/components/EditToolbar.tsx` with Save, New Node, Exit buttons
 - [ ] Pass `onSave`, `onNewNode`, `onExit` props
 - [ ] In `App.tsx`, swap `SideToolbar` children: `editMode ? <EditToolbar /> : <ViewerToolbar />`
-- [ ] The existing viewer buttons (Menu, Edit Mode, Open in Editor, Code Editor) move into a named `<ViewerToolbar>` component or inline block for clarity
 
 ### 6.6 — New Node on Canvas
-- [ ] Add `onAddCharacter?: (character: EditableCharacter) => void` prop to `GraphCanvas`
-- [ ] In `GraphCanvas`, expose a `handleAddNode` that:
-  1. Reads current viewport centre via `useReactFlow().screenToFlowPosition`
-  2. Creates an `EditableCharacter` stub (empty name, `introducedAt = currentUnit`)
-  3. Calls `onAddCharacter` with the stub
-- [ ] `EditToolbar` "New Node" button calls `GraphCanvas` handler via a forwarded ref or a prop callback routed through `App.tsx`
-- [ ] In `App.tsx`, `handleAddCharacter(char)`: append to `editGraph.characters`, re-derive snapshot
-- [ ] Save updated graph to sessionStorage
+- [ ] Add `onAddCharacter?: (character: Character) => void` prop to `GraphCanvas`
+- [ ] In `GraphCanvas`, `handleAddNode`: reads viewport centre via `useReactFlow().screenToFlowPosition`, creates a `Character` stub with a generated `crypto.randomUUID()` ID and `introducedAt = currentUnit`, calls `onAddCharacter`
+- [ ] In `App.tsx`, `handleAddCharacter(char)`: append to `editGraph.characters`, re-derive snapshot, save session
 
 ### 6.7 — Inline Name Prompt for New Nodes
-- [ ] Add `pendingNodeId: string | null` state to `GraphCanvas` (set when a node is freshly added)
-- [ ] `CharacterNode` accepts an `isNaming?: boolean` data field
-- [ ] When `isNaming`, render an `<input>` over the node label instead of the name text
+- [ ] Add `pendingNodeId: string | null` state to `GraphCanvas`
+- [ ] `CharacterNode` accepts `isNaming?: boolean` data field — renders `<input>` over label
 - [ ] On Enter or blur: call `onCommitName(id, name)` prop; clear `pendingNodeId`
 - [ ] On Escape: call `onCancelNode(id)` — removes the node from `editGraph`
 
 ### 6.8 — Empty Canvas State
-- [ ] In `GraphCanvas`, when `editMode && nodes.length === 0`, render a centred hint overlay:
-  `"Click New Node to add your first character"`
-- [ ] Hint disappears as soon as the first node exists
+- [ ] When `editMode && nodes.length === 0`, render centred hint: `"Click New Node to add your first character"`
 
 ### 6.9 — Timeline (New Graph)
-- [ ] When `editGraph != null`, `TimelineScrubber` receives `series` derived from `editGraph`
-  (`totalUnits: 1` for a new graph, grows as chapters are added in later phases)
-- [ ] The scrubber renders correctly for a single-chapter graph (single dot / no range)
+- [ ] `TimelineScrubber` receives `series` from `editGraph.series` when in edit mode
+- [ ] Renders correctly for `totalUnits: 1` (single point, no range)
 
 ---
 
@@ -254,14 +262,14 @@ When `editGraph` is set, the backend graph data is still fetched in the backgrou
 - "Add Chapter" increments `totalUnits`; scrubber grows
 - Chapter labels visible as ticks on the scrubber
 
-### 6.x — Edit Existing Backend Graph
-- "Edit Mode" on an existing graph fetches `GET /api/series/:id/export`, converts to `EditableGraph`
-- Changes diff'd against the original and POSTed to `POST /api/import`
+### ~~6.x — Edit Existing Backend Graph (full fidelity)~~ ✅ (resolved in 6.2)
+- `GET /api/series/:id/graph/full` returns all characters and all relationships regardless of `ended_at`
+- `useFullGraph` hook consumes it; `handleToggleEditMode` uses it as the edit base — no merge workaround needed
 
 ### 6.x — Backend Persistence
 - `POST /api/series` — create series
 - `POST /api/import` — upsert characters + relationships
-- Save button posts the full `EditableGraph` converted to the import payload
+- Save button posts the full edit graph converted to the import payload
 
 ### 6.x — Bidirectional LTG Sync
 - Canvas mutations produce LTG AST diffs; code editor reflects changes in real time

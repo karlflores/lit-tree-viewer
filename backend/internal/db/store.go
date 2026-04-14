@@ -33,3 +33,7 @@ func (s *PGStore) GetGraphSnapshot(ctx context.Context, seriesID uuid.UUID, atUn
 func (s *PGStore) GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error) {
 	return GetCompiledGraph(ctx, s.pool, seriesID)
 }
+
+func (s *PGStore) GetFullGraph(ctx context.Context, seriesID uuid.UUID) (domain.GraphSnapshot, error) {
+	return GetFullGraph(ctx, s.pool, seriesID)
+}

@@ -342,28 +342,28 @@ compilable directly to the LitTree domain model.
 > Local-first: edits live in `sessionStorage` until a backend endpoint is wired up.
 > The canvas and LTG source will eventually stay in sync bidirectionally.
 
-#### 6.1 — Data Model & Session Helpers
-- [ ] `src/types/editGraph.ts` — `EditableGraph`, `EditableCharacter`, `EditableRelationship` types
-- [ ] `src/lib/editGraphSession.ts` — `createEmptyGraph`, `saveEditGraph`, `loadEditGraph`, `clearEditGraph`
-- [ ] `src/lib/editableToSnapshot.ts` — `editableToSnapshot(graph, atUnit) → GraphSnapshot`
-- [ ] Unit tests for `editableToSnapshot`
+#### 6.1 — Data Model & Session Helpers ✅
+- [x] `src/types/editGraph.ts` — `EditableGraph`, `EditableCharacter`, `EditableRelationship` types
+- [x] `src/lib/editGraphSession.ts` — `createEmptyGraph`, `saveEditGraph`, `loadEditGraph`, `clearEditGraph`
+- [x] `src/lib/editableToSnapshot.ts` — `editableToSnapshot(graph, atUnit) → GraphSnapshot`
+- [x] Unit tests for `editableToSnapshot`
 
-#### 6.2 — App-Level State & Snapshot Derivation
-- [ ] Add `editGraph: EditableGraph | null` state to `App.tsx`
-- [ ] `handleNewGraph()` — create empty graph, set `editMode = true`, reset `currentUnit = 1`
-- [ ] `handleSaveGraph()` — call `saveEditGraph`, emit "Saved" toast
-- [ ] `handleExitEdit()` — clear `editGraph` from state, set `editMode = false`
-- [ ] Snapshot derivation priority: `editGraph` → `localGraph` → backend
-- [ ] Resume in-progress edit session from `sessionStorage` on mount
+#### 6.2 — App-Level State & Snapshot Derivation ✅
+- [x] Add `editGraph: EditableGraph | null` state to `App.tsx`
+- [x] `handleNewGraph()` — create empty graph, set `editMode = true`, reset `currentUnit = 1`
+- [x] `handleSaveGraph()` — call `saveEditGraph`, emit "Saved" toast
+- [x] `handleExitEdit()` — clear `editGraph` from state, set `editMode = false`
+- [x] Snapshot derivation priority: `editGraph` → `localGraph` → backend
+- [x] Resume in-progress edit session from `sessionStorage` on mount
 
-#### 6.3 — "New Graph" Button in Viewer Toolbar
-- [ ] Add "New Graph" `ToolbarButton` to `SideToolbar` (below "Edit Mode")
-- [ ] Wire `onClick` to `handleNewGraph`
+#### 6.3 — "New Graph" Button in Viewer Toolbar ✅
+- [x] Add "New Graph" `ToolbarButton` to `SideToolbar` (below "Edit Mode")
+- [x] Wire `onClick` to `handleNewGraph`
 
-#### 6.4 — Editable Title in Header
-- [ ] Render `<input>` instead of `<span>` for title when `editMode && editGraph != null`
-- [ ] On change: update `editGraph.title` in state
-- [ ] On blur / Enter / Escape: commit; reset to `"Untitled"` if empty
+#### 6.4 — Editable Title in Header ✅
+- [x] Render `<input>` instead of `<span>` for title when `editMode && editGraph != null`
+- [x] On change: update `editGraph.title` in state
+- [x] On blur / Enter / Escape: commit; reset to `"Untitled"` if empty
 
 #### 6.5 — Edit Toolbar Component
 - [ ] `src/components/EditToolbar.tsx` — Save, New Node, Exit buttons

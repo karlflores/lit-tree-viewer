@@ -27,6 +27,11 @@ export const fetchGraphSnapshot = (
 ): Promise<Result<GraphSnapshot, ApiError>> =>
   request<GraphSnapshot>(`/series/${seriesId}/graph?at=${atUnit}`)
 
+export const fetchFullGraph = (
+  seriesId: string,
+): Promise<Result<GraphSnapshot, ApiError>> =>
+  request<GraphSnapshot>(`/series/${seriesId}/graph/full`)
+
 export const fetchCompiledGraph = (
   seriesId: string,
 ): Promise<Result<CompileSuccess, ApiError>> =>

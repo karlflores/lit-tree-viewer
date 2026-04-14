@@ -2,11 +2,11 @@ openapi: 3.1.0
 
 info:
   title: LitTree API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Read-only REST API for the LitTree character-relationship viewer.
-    The API exposes series metadata and time-sliced graph snapshots
-    (characters + relationships) at a given narrative unit (chapter, episode, etc.).
+    The API exposes series metadata, time-sliced graph snapshots at a given
+    narrative unit, and a full (unfiltered) graph used for layout and edit mode.
 
 servers:
   - url: http://localhost:8080
@@ -77,7 +77,7 @@ paths:
       operationId: getGraphSnapshot
       tags: [Graph]
       description: |
-        Returns the complete character-relationship graph state at the given narrative
+        Returns the character-relationship graph filtered to a specific narrative
         unit (chapter number, episode number, etc.).
 
         **Temporal filtering rules:**
@@ -86,6 +86,9 @@ paths:
         - `character.name` is the effective display name resolved as of `at`
           (the most recent rename at or before `at`, falling back to the base name).
         - `character.renames` contains the full rename history up to `at` (omitted if empty).
+
+        Use `/graph/full` instead when you need the complete history with no
+        temporal filtering (e.g. for layout or edit mode).
       parameters:
         - $ref: '#/components/parameters/SeriesId'
         - name: at
@@ -102,6 +105,44 @@ paths:
       responses:
         '200':
           description: Graph snapshot — series metadata, characters, and relationships all filtered to `at`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/series/{id}/graph/full:
+    get:
+      summary: Get the full unfiltered graph
+      operationId: getFullGraph
+      tags: [Graph]
+      description: |
+        Returns all characters and all relationships for a series with **no
+        temporal filtering**. Every character and relationship is included
+        regardless of `introducedAt` or `endedAt`.
+
+        Intended for two use cases:
+        1. **Layout** — computing node positions from the complete character set
+           so positions are stable as the timeline scrubber moves.
+        2. **Edit mode entry** — seeding the editable graph with the full
+           relationship history so no ended relationships are silently dropped.
+
+        `atUnit` in the response is set to `series.totalUnits`.
+
+        Character display names are resolved at `totalUnits` (the final chapter).
+        `character.renames` contains the complete rename history.
+      parameters:
+        - $ref: '#/components/parameters/SeriesId'
+      responses:
+        '200':
+          description: |
+            Full graph — all characters and all relationships, unfiltered.
+            `atUnit` equals `series.totalUnits`.
           content:
             application/json:
               schema:

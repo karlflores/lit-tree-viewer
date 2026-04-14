@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { editableToSnapshot } from '../lib/editableToSnapshot'
-import type { EditableGraph, EditableCharacter, EditableRelationship } from '../types/editGraph'
+import type { GraphSnapshot, Character, Relationship, Series } from '../types/domain'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -8,18 +8,24 @@ import type { EditableGraph, EditableCharacter, EditableRelationship } from '../
 
 const SERIES_ID = 'edit:test-id'
 
-const baseGraph: EditableGraph = {
-  id:            SERIES_ID,
-  title:         'Test Series',
-  mediaType:     'book',
-  unitLabel:     'Chapter',
-  totalUnits:    10,
-  characters:    [],
-  relationships: [],
+const series: Series = {
+  id:         SERIES_ID,
+  title:      'Test Series',
+  mediaType:  'book',
+  unitLabel:  'Chapter',
+  totalUnits: 10,
 }
 
-const charA: EditableCharacter = {
+const baseGraph: GraphSnapshot = {
+  series,
+  characters:    [],
+  relationships: [],
+  atUnit:        10,
+}
+
+const charA: Character = {
   id:           'char:a',
+  seriesId:     SERIES_ID,
   name:         'Alice',
   aliases:      [],
   description:  null,
@@ -28,8 +34,9 @@ const charA: EditableCharacter = {
   diedAt:       null,
 }
 
-const charB: EditableCharacter = {
+const charB: Character = {
   id:           'char:b',
+  seriesId:     SERIES_ID,
   name:         'Bob',
   aliases:      [],
   description:  null,
@@ -38,8 +45,9 @@ const charB: EditableCharacter = {
   diedAt:       null,
 }
 
-const charC: EditableCharacter = {
+const charC: Character = {
   id:           'char:c',
+  seriesId:     SERIES_ID,
   name:         'Carol',
   aliases:      [],
   description:  null,
@@ -48,8 +56,9 @@ const charC: EditableCharacter = {
   diedAt:       7,
 }
 
-const rel: EditableRelationship = {
+const rel: Relationship = {
   id:           'rel:ab',
+  seriesId:     SERIES_ID,
   fromId:       'char:a',
   toId:         'char:b',
   label:        'ally',
@@ -107,7 +116,7 @@ describe('atUnit clamping', () => {
 // ---------------------------------------------------------------------------
 
 describe('character filtering', () => {
-  const graph: EditableGraph = { ...baseGraph, characters: [charA, charB, charC] }
+  const graph: GraphSnapshot = { ...baseGraph, characters: [charA, charB, charC] }
 
   it('returns an empty array for an empty graph', () => {
     expect(editableToSnapshot(baseGraph, 5).characters).toHaveLength(0)
@@ -155,7 +164,7 @@ describe('character filtering', () => {
 // ---------------------------------------------------------------------------
 
 describe('relationship filtering', () => {
-  const graph: EditableGraph = {
+  const graph: GraphSnapshot = {
     ...baseGraph,
     characters:    [charA, charB, charC],
     relationships: [rel],
@@ -177,14 +186,14 @@ describe('relationship filtering', () => {
   })
 
   it('excludes relationships whose endedAt < atUnit', () => {
-    const endedRel: EditableRelationship = { ...rel, id: 'rel:ended', endedAt: 4 }
-    const g: EditableGraph = { ...graph, relationships: [endedRel] }
+    const endedRel: Relationship = { ...rel, id: 'rel:ended', endedAt: 4 }
+    const g: GraphSnapshot = { ...graph, relationships: [endedRel] }
     expect(editableToSnapshot(g, 5).relationships).toHaveLength(0)
   })
 
   it('includes relationships whose endedAt === atUnit', () => {
-    const endedRel: EditableRelationship = { ...rel, id: 'rel:ended', endedAt: 5 }
-    const g: EditableGraph = { ...graph, relationships: [endedRel] }
+    const endedRel: Relationship = { ...rel, id: 'rel:ended', endedAt: 5 }
+    const g: GraphSnapshot = { ...graph, relationships: [endedRel] }
     expect(editableToSnapshot(g, 5).relationships).toHaveLength(1)
   })
 
@@ -208,13 +217,13 @@ describe('relationship filtering', () => {
   })
 
   it('propagates optional kind field', () => {
-    const kindRel: EditableRelationship = { ...rel, kind: 'ally' }
-    const g: EditableGraph = { ...graph, relationships: [kindRel] }
+    const kindRel: Relationship = { ...rel, kind: 'ally' }
+    const g: GraphSnapshot = { ...graph, relationships: [kindRel] }
     const snap = editableToSnapshot(g, 5)
     expect(snap.relationships[0]!.kind).toBe('ally')
   })
 
-  it('omits kind when not set on the editable relationship', () => {
+  it('omits kind when not set on the relationship', () => {
     const snap = editableToSnapshot(graph, 5)
     expect(snap.relationships[0]!.kind).toBeUndefined()
   })

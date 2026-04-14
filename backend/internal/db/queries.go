@@ -440,6 +440,73 @@ func GetCompiledGraph(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUI
 	}, nil
 }
 
+// getAllRelationships returns every relationship for a series with no
+// temporal filtering — introduced_at and ended_at are not considered.
+func getAllRelationships(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID) ([]domain.Relationship, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT id, series_id, from_id, to_id, kind, label, directed, introduced_at, ended_at
+		FROM relationships
+		WHERE series_id = $1
+		ORDER BY introduced_at
+	`, seriesID)
+	if err != nil {
+		return nil, fmt.Errorf("querying all relationships: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.Relationship
+	for rows.Next() {
+		var r domain.Relationship
+		if err := rows.Scan(
+			&r.ID, &r.SeriesID, &r.FromID, &r.ToID,
+			&r.Kind, &r.Label, &r.Directed, &r.IntroducedAt, &r.EndedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning relationship row: %w", err)
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// GetFullGraph returns all characters and all relationships for a series with
+// no temporal filtering. Character display names are resolved at TotalUnits.
+// Use this when the full history is needed (e.g. entering edit mode).
+func GetFullGraph(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID) (domain.GraphSnapshot, error) {
+	series, err := GetSeriesByID(ctx, pool, seriesID)
+	if err != nil {
+		return domain.GraphSnapshot{}, err
+	}
+
+	// GetCharactersAt with TotalUnits returns all characters (none are introduced
+	// after the final chapter) with names resolved at the final chapter.
+	characters, err := GetCharactersAt(ctx, pool, seriesID, series.TotalUnits)
+	if err != nil {
+		return domain.GraphSnapshot{}, err
+	}
+
+	renames, err := getRenamesAt(ctx, pool, seriesID, series.TotalUnits)
+	if err != nil {
+		return domain.GraphSnapshot{}, err
+	}
+	for i := range characters {
+		if r, ok := renames[characters[i].ID]; ok {
+			characters[i].Renames = r
+		}
+	}
+
+	relationships, err := getAllRelationships(ctx, pool, seriesID)
+	if err != nil {
+		return domain.GraphSnapshot{}, err
+	}
+
+	return domain.GraphSnapshot{
+		Series:        series,
+		Characters:    characters,
+		Relationships: relationships,
+		AtUnit:        series.TotalUnits,
+	}, nil
+}
+
 // GetGraphSnapshot composes a full graph at a given unit position.
 // This is a pure read — four queries, no transaction needed.
 func GetGraphSnapshot(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error) {
