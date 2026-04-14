@@ -334,55 +334,68 @@ compilable directly to the LitTree domain model.
 - [x] `applyDagreLayout` and its tests removed
 - [x] `@dagrejs/dagre` removed from `package.json`
 
-### Phase 6 — Canvas Edit Mode (was Phase 5)
+### Phase 6 — Canvas Edit Mode
 
-> **Concept:** A visual way to author LTG declarations. The canvas becomes an interactive
-> editor where adding a node, drawing a relationship, or marking a character deceased
-> produces the equivalent LTG statement in the underlying document. The two representations
-> (visual graph ↔ LTG source) stay in sync bidirectionally.
+> **Full specification:** [`docs/edit-mode.md`](docs/edit-mode.md)
 >
-> The timeline scrubber remains active in edit mode — the selected unit determines which
-> block all mutations are applied to.
+> A visual way to create and modify character graphs directly on the canvas.
+> Local-first: edits live in `sessionStorage` until a backend endpoint is wired up.
+> The canvas and LTG source will eventually stay in sync bidirectionally.
 
-#### 5.1 — Edit Mode Toolbar
-- [ ] When `editMode` is active, swap the standard `SideToolbar` children for the edit toolbar buttons (no structural changes to `SideToolbar` needed — it is already a generic container)
-- [ ] **Save button** — persists the current graph state / compiled LTG back to the backend
-- [ ] **Exit button** — leaves edit mode and restores the standard view toolbar
-- [ ] **New Block button** — appends an empty block at the end of the timeline at the current unit type
-- [ ] **New Chapter button** — appends a new chapter-type block (specific to series using `set block: chapter`) and advances the timeline to it
-- [ ] **Edit Timeline button** — opens a timeline grouping tool for organising blocks into volumes/arcs (see §5.4 below)
-- [ ] **New Node button** — creates a new character node; places it at the viewport centre and immediately opens an inline name-entry prompt
+#### 6.1 — Data Model & Session Helpers
+- [ ] `src/types/editGraph.ts` — `EditableGraph`, `EditableCharacter`, `EditableRelationship` types
+- [ ] `src/lib/editGraphSession.ts` — `createEmptyGraph`, `saveEditGraph`, `loadEditGraph`, `clearEditGraph`
+- [ ] `src/lib/editableToSnapshot.ts` — `editableToSnapshot(graph, atUnit) → GraphSnapshot`
+- [ ] Unit tests for `editableToSnapshot`
 
-#### 5.2 — Canvas Interactions in Edit Mode
-- [ ] **Right-click context menu on a node** — a small floating menu anchored to the node with actions:
-  - Toggle deceased (adds/removes a `deceased <id>` event at the current unit)
-  - Edit display name (inline edit of the character's current display name)
-  - Rename at unit (adds a `rename <id>: "<new name>"` event at the current unit, preserving name history)
-  - Delete node (removes the character — with a confirmation step; cascades to its relationships)
-- [ ] **Drag to connect nodes** — dragging from a node handle to another node opens a "New Relationship" prompt (label, directed/undirected); emits a `link <label>(<a> -- <b>)` or `link <label>(<a> -> <b>)` event
-- [ ] **Click a relationship edge in edit mode** — select it; shows an edge toolbar with: edit label, toggle direction, delete (emits `unlink`)
+#### 6.2 — App-Level State & Snapshot Derivation
+- [ ] Add `editGraph: EditableGraph | null` state to `App.tsx`
+- [ ] `handleNewGraph()` — create empty graph, set `editMode = true`, reset `currentUnit = 1`
+- [ ] `handleSaveGraph()` — call `saveEditGraph`, emit "Saved" toast
+- [ ] `handleExitEdit()` — clear `editGraph` from state, set `editMode = false`
+- [ ] Snapshot derivation priority: `editGraph` → `localGraph` → backend
+- [ ] Resume in-progress edit session from `sessionStorage` on mount
 
-#### 5.3 — Timeline Integration
-- [ ] The scrubber unit determines which block is being authored; the block index and label are shown prominently while in edit mode
-- [ ] Mutations (new actor, link, unlink, deceased, rename) are always emitted into the block at `currentUnit`
-- [ ] Navigating to a different unit in edit mode switches the editing context — a brief confirmation prompt if there are unsaved changes on the current block
+#### 6.3 — "New Graph" Button in Viewer Toolbar
+- [ ] Add "New Graph" `ToolbarButton` to `SideToolbar` (below "Edit Mode")
+- [ ] Wire `onClick` to `handleNewGraph`
 
-#### 5.4 — Edit Timeline Tool (design TBD)
-- [ ] Visual interface for grouping blocks into `group "..."` containers (volumes, arcs, seasons)
-- [ ] Drag-to-reorder blocks within a group
-- [ ] Create / rename / delete groups
-- [ ] Exact interaction model to be fleshed out before implementation begins
+#### 6.4 — Editable Title in Header
+- [ ] Render `<input>` instead of `<span>` for title when `editMode && editGraph != null`
+- [ ] On change: update `editGraph.title` in state
+- [ ] On blur / Enter / Escape: commit; reset to `"Untitled"` if empty
 
-#### 5.5 — Bidirectional LTG Sync
-- [ ] Canvas mutations produce LTG AST diffs, not raw text edits — round-trip through the language server
-- [ ] If the code editor is open alongside the canvas, it reflects changes in real time
-- [ ] If the user edits LTG source and compiles, the canvas updates to match
-- [ ] Conflict resolution strategy TBD (likely: last-write-wins per block, with the canonical source being the LTG document)
+#### 6.5 — Edit Toolbar Component
+- [ ] `src/components/EditToolbar.tsx` — Save, New Node, Exit buttons
+- [ ] Swap `SideToolbar` children in `App.tsx` based on `editMode`
 
-#### 5.6 — Multi-Series Support
-- [ ] Series browser / landing page
-- [ ] Create new series wizard (title, media type, unit label)
-- [ ] Series switcher in the header
+#### 6.6 — New Node on Canvas
+- [ ] `onAddCharacter` prop on `GraphCanvas` — called with stub character
+- [ ] Place new node at viewport centre via `screenToFlowPosition`
+- [ ] `handleAddCharacter` in `App.tsx` — append to `editGraph.characters`, re-derive snapshot, save session
+
+#### 6.7 — Inline Name Prompt for New Nodes
+- [ ] `pendingNodeId` state in `GraphCanvas` — set on new node creation
+- [ ] `isNaming` field on `CharacterNodeData` — renders `<input>` over node label
+- [ ] On Enter / blur: commit name via `onCommitName(id, name)` prop
+- [ ] On Escape: call `onCancelNode(id)` — removes node from `editGraph`
+
+#### 6.8 — Empty Canvas Hint
+- [ ] When `editMode && nodes.length === 0`: centred hint overlay — `"Click New Node to add your first character"`
+
+#### 6.9 — Timeline for New Graph
+- [ ] `TimelineScrubber` handles `totalUnits: 1` gracefully (single point, no range)
+
+---
+
+### Future Edit Mode (later phases)
+
+- Drag between node handles to draw relationships; click edge to edit/delete
+- Right-click node context menu (toggle deceased, rename, delete)
+- Add / remove chapters (increment `totalUnits`)
+- Edit existing backend graphs (fetch export → `EditableGraph` → POST import)
+- Backend persistence (`POST /api/series`, `POST /api/import`)
+- Bidirectional LTG sync (canvas mutations → AST diffs → code editor updates)
 
 ### Phase 7 — Character Enrichment (was Phase 6)
 - [ ] Enrichment service in Go (Wikipedia API → Fandom API → Claude API fallback)
