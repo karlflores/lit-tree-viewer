@@ -36,7 +36,7 @@ describe('TimelineScrubber', () => {
     // Dots are small divs inside the track; the cursor is also a div, so we count
     // non-null items by checking how many chapter positions are rendered.
     // The component conditionally returns null for the previewUnit, so 9 divs for dots + 2 structural divs (track line + cursor).
-    const trackArea = container.querySelector('[style*="height: 28px"]')
+    const trackArea = container.querySelector('.cursor-pointer')
     expect(trackArea).toBeInTheDocument()
   })
 
@@ -52,7 +52,7 @@ describe('TimelineScrubber', () => {
     const { container } = render(
       <TimelineScrubber series={series} currentUnit={1} onChange={onChange} />,
     )
-    const track = container.querySelector('[style*="height: 28px"]') as HTMLElement
+    const track = container.querySelector('.cursor-pointer') as HTMLElement
     expect(() => {
       track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0 }))
       track.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 50 }))

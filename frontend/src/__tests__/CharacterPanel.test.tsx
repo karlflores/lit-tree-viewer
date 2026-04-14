@@ -135,9 +135,9 @@ describe('CharacterPanel', () => {
     expect(aside?.className).toContain('translate-x-0')
   })
 
-  it('applies translate-x-full when isOpen is false', () => {
+  it('applies translate-x-[calc(100%+1rem)] when isOpen is false', () => {
     const { container } = render(<CharacterPanel {...defaultProps} isOpen={false} />)
     const aside = container.querySelector('aside')
-    expect(aside?.className).toContain('translate-x-full')
+    expect(aside?.className).toContain('translate-x-[calc(100%+1rem)]')
   })
 })
