@@ -24,8 +24,8 @@ annotate when each one begins or ends.
 |---|---|
 | Edge directionality | Both directed and undirected edges supported. Type determines direction. |
 | Edge identity | Each edge has a **type** (drives visual style) and a **label** (human-readable, e.g. "adoptive father") |
-| Graph layout | Force-directed to start. Layout options (hierarchical, manual) are a future feature. |
-| Node positions | Re-run force layout on every data change. No persisted positions for now. |
+| Graph layout | Ranked force layout (Phase 1–4). Always computed on the final chapter; prior chapters reuse cached positions. Auto-layout button in ZoomControls. |
+| Node positions | Computed once on the full graph, cached to `savedPositionsRef` and `localStorage`. User-dragged positions persist across sessions. |
 | Timeline granularity | Integer only — chapters for books, episodes for shows. No fractional positions. |
 | Series scope | Single series to start (proves the concept). Multi-series added alongside the editor. |
 | Character data | Hybrid: automated enrichment (Wikipedia / fan wikis / AI) + manual user input as override |
@@ -263,7 +263,7 @@ compilable directly to the LitTree domain model.
 - [ ] **Phase E** — In-browser editor: Monaco + `monaco-languageclient` over WebSocket to the language server; diagnostics are pushed by the server via standard LSP `publishDiagnostics`
 - [ ] **Phase F** — Tooling: VSCode extension (stdio LSP), CLI (`ltg check`, `ltg fmt`)
 
-### Phase 5 — Graph Layout (Ranked Force Layout)
+### Phase 5 — Graph Layout (Ranked Force Layout) ✅
 
 > Full specification: [`docs/layout-algorithm.md`](docs/layout-algorithm.md)
 >
@@ -272,65 +272,67 @@ compilable directly to the LitTree domain model.
 > force-directed refinement → incremental new-node placement.
 > An auto-layout button lets users re-run the full layout at any time.
 
-#### 5.1 — Phase 1: Rank Assignment
-- [ ] Extract directed subgraph from edge list
-- [ ] Compute in-degree map for the directed subgraph
-- [ ] Identify roots (in-degree = 0); fall back to highest-total-degree node if all in cycles
-- [ ] BFS longest-path layering: `rank[s] = max(rank[s], rank[n] + 1)`
-- [ ] Cycle detection and back-edge removal (directed cycles only)
-- [ ] Rank assignment for undirected-only / isolated nodes (average of neighbour ranks, fallback to 0)
-- [ ] Unit tests: roots correct, ranks respect longest path, cycle handled, isolated node gets rank 0
+#### 5.1 — Phase 1: Rank Assignment ✅
+- [x] Extract directed subgraph from edge list
+- [x] Compute in-degree map for the directed subgraph
+- [x] Identify roots (in-degree = 0); fall back to highest-total-degree node if all in cycles
+- [x] BFS longest-path layering: `rank[s] = max(rank[s], rank[n] + 1)`
+- [x] Cycle detection and back-edge removal via iterative DFS grey-colouring
+- [x] Rank assignment for undirected-only / isolated nodes (average of neighbour ranks, fallback to 0)
+- [x] Unit tests: roots correct, ranks respect longest path, cycle handled, isolated node gets rank 0
 
-#### 5.2 — Phase 2: Initial Position Assignment
-- [ ] Group nodes by rank
-- [ ] Sort each rank row by total degree (descending) — high-degree nodes centred
-- [ ] Compute `COLUMN_SPACING = max(MIN_NODE_DIST, avg_degree_in_row * 20)`
-- [ ] Assign x by centred column index: `x[i] = (i - (count-1)/2) * COLUMN_SPACING`
-- [ ] Assign y by rank: `y = rank * RANK_HEIGHT`
-- [ ] Barycentric crossing reduction (2 sweeps per rank row)
-- [ ] Unit tests: high-degree node is at lowest |x|; row width scales with degree
+#### 5.2 — Phase 2: Initial Position Assignment ✅
+- [x] Group nodes by rank
+- [x] Sort each rank row by total degree (descending), re-ordered centre-out so highest-degree node lands at x ≈ 0
+- [x] Compute `COLUMN_SPACING = max(MIN_NODE_DIST, avg_degree_in_row * 20)`
+- [x] Assign x by centred column index: `x[i] = (i - (count-1)/2) * COLUMN_SPACING`
+- [x] Assign y by rank: `y = rank * RANK_HEIGHT`
+- [x] Crossing minimisation: 5 rounds of forward/backward barycentric sweeps + greedy adjacent-swap pass
+- [x] Unit tests: high-degree node is at lowest |x|; row width scales with degree
 
-#### 5.3 — Phase 3: Force-Directed Refinement
-- [ ] Implement repulsion force (all pairs, Coulomb `1/r²`; hard push when `< MIN_NODE_DIST/2`)
-- [ ] Implement attraction force (edges only, Hooke; directed edges weight ×1.5)
-- [ ] Implement rank-anchoring force (y-axis pull toward `rank * RANK_HEIGHT`)
-- [ ] Implement centre-gravity force (prevent cluster drift)
-- [ ] Euler integration loop with velocity damping and early-exit convergence
-- [ ] Expose all constants (`MIN_NODE_DIST`, `TARGET_EDGE_LENGTH`, etc.) as a single config object
-- [ ] Unit tests: no pair closer than `MIN_NODE_DIST` after refinement; converges within `MAX_ITERATIONS`
+#### 5.3 — Phase 3: Force-Directed Refinement ✅
+- [x] Repulsion force (all pairs, Coulomb `1/r²`; 10× hard push when `< MIN_NODE_DIST/2`)
+- [x] Attraction force (edges only, Hooke; directed edges weight ×1.5)
+- [x] Rank-anchoring force (y-axis pull toward `rank * RANK_HEIGHT`)
+- [x] Centre-gravity force (prevent cluster drift)
+- [x] Node-edge repulsion force (5th force — pushes nodes away from non-adjacent edge segments)
+- [x] Euler integration with velocity damping, per-step `MAX_STEP` clamp (prevents divergence at close starts), and early-exit convergence
+- [x] Post-processing: 30-pass hard node-node separation + 20-pass hard node-edge separation
+- [x] All constants in a single `LAYOUT_CONSTANTS` export
+- [x] Unit tests: no pair closer than `MIN_NODE_DIST` after refinement; converges within `MAX_ITERATIONS`
 
-#### 5.4 — Phase 4: Incremental New Node Placement
-- [ ] Detect new nodes (present in current graph but not in `savedPositions`)
-- [ ] Compute seed from average neighbour positions
-- [ ] 8-direction open-space scan to pick placement direction
-- [ ] Nudge loop to clear `MIN_NODE_DIST` overlap
-- [ ] Fallback: 4×4 grid density scan for nodes with no neighbours
-- [ ] 20-iteration force refinement with existing nodes frozen as anchors
-- [ ] Unit tests: new node ≥ `MIN_NODE_DIST` from all existing; with neighbours within 2× `TARGET_EDGE_LENGTH`
+#### 5.4 — Phase 4: Incremental New Node Placement ✅
+- [x] Detect new nodes (present in current graph but not in `savedPositions`)
+- [x] Compute seed from average neighbour positions
+- [x] 8-direction open-space scan to pick placement direction
+- [x] Nudge loop (up to 50 attempts) to clear `MIN_NODE_DIST` overlap
+- [x] Fallback: 4×4 grid density scan for nodes with no neighbours
+- [x] 20-iteration force refinement with existing nodes frozen as anchors
+- [x] Unit tests: new node ≥ `MIN_NODE_DIST` from all existing; placed near neighbours
 
-#### 5.5 — Wire Up in GraphCanvas
-- [ ] Replace `applyDagreLayout` call with new `applyLayout` in the structure-change effect
-- [ ] Pass `savedPositions` into `applyLayout` so Phase 4 can distinguish new vs existing nodes
-- [ ] Thread `handleAutoLayout` callback: clear `savedPositionsRef`, re-run Phase 1–3, write to `layoutNodes`
-- [ ] Remove `@dagrejs/dagre` dependency once new layout is validated
+#### 5.5 — Wire Up in GraphCanvas ✅
+- [x] `applyLayout` used exclusively; `applyDagreLayout` removed
+- [x] `layoutSnapshot` prop (final chapter) provides stable full-graph input
+- [x] Two-effect pattern: layout effect `[layoutRawNodes, layoutEdges]` + data-sync effect `[currentRawNodes]`
+- [x] After every layout run all positions written back to `savedPositionsRef` — timeline scrubs never re-trigger the force algorithm
+- [x] `handleAutoLayout` operates on full graph regardless of displayed chapter
+- [x] `@dagrejs/dagre` removed from `package.json` and `layout.ts`
 
-#### 5.6 — Auto-Layout Button
-- [ ] Add Auto Layout button to `ZoomControls` (icon: grid/auto-fit; tooltip: "Auto layout")
-- [ ] Button calls `onAutoLayout` prop passed down from `GraphCanvas`
-- [ ] Button is disabled while graph is empty (0 nodes)
-- [ ] Animate all nodes to new positions via existing `useAnimatedLayout` hook (no extra work needed)
+#### 5.6 — Auto-Layout Button ✅
+- [x] Auto Layout button in `ZoomControls`
+- [x] Button calls `onAutoLayout` prop passed down from `GraphCanvas`
+- [x] Animates all nodes to new positions via `useAnimatedLayout`
 
-#### 5.7 — Edge Rendering Improvements
-- [ ] Switch all edges to straight lines (`StraightEdge` or custom SVG path) — remove bezier curves
-- [ ] Detect parallel edges (same source/target pair, regardless of direction)
-- [ ] Apply perpendicular offset (12 px per parallel edge, symmetric) so parallel edges are individually readable
-- [ ] Update `RelationshipEdge.tsx` to accept and render offset
+#### 5.7 — Edge Rendering ✅
+- [x] Native bezier curves via `getBezierPath` (replaced custom straight-line SVG path)
+- [x] Closest-anchor heuristic: 4 midpoint anchors per node; minimum-distance pair chosen; `Position` enum drives control-point direction
+- [x] Parallel edges differentiated by varying `curvature` (fan out) rather than perpendicular pixel offset
+- [x] Edge labels render at bezier midpoint with colour-matched styling
 
-#### 5.8 — Tests and Cleanup
-- [ ] Extend `layout.test.ts` with full Phase 1–4 coverage (see spec for table of required tests)
-- [ ] Remove Dagre from `package.json` and `layout.ts`
-- [ ] Smoke-test against The Count of Monte Cristo seed data (main series used for dev)
-- [ ] Verify auto-layout animation plays correctly at all graph sizes (1 node, 5 nodes, 30+ nodes)
+#### 5.8 — Tests and Cleanup ✅
+- [x] `layout.test.ts` extended with Phase 1–4 coverage
+- [x] `applyDagreLayout` and its tests removed
+- [x] `@dagrejs/dagre` removed from `package.json`
 
 ### Phase 6 — Canvas Edit Mode (was Phase 5)
 

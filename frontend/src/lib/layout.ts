@@ -1,4 +1,3 @@
-import Dagre from '@dagrejs/dagre'
 import type { Edge, Node } from '@xyflow/react'
 
 // ---------------------------------------------------------------------------
@@ -890,39 +889,3 @@ export function applyLayout(
   }))
 }
 
-// ---------------------------------------------------------------------------
-// Legacy — kept until GraphCanvas is updated and tests are migrated
-// ---------------------------------------------------------------------------
-
-/**
- * Apply a Dagre hierarchical layout.
- * @deprecated Use applyLayout instead.
- */
-export const applyDagreLayout = (
-  nodes: readonly Node[],
-  edges: readonly Edge[],
-): Node[] => {
-  if (nodes.length === 0) return []
-
-  const g = new Dagre.graphlib.Graph()
-  g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({ rankdir: 'TB', nodesep: 80, ranksep: 120, marginx: 60, marginy: 60 })
-
-  for (const node of nodes) g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
-
-  for (const edge of edges) {
-    if (isDirected(edge)) {
-      g.setEdge(edge.source, edge.target, { minlen: 1, weight: 2 })
-    } else {
-      g.setEdge(edge.source, edge.target, { minlen: 1, weight: 1 })
-      g.setEdge(edge.target, edge.source, { minlen: 1, weight: 1 })
-    }
-  }
-
-  Dagre.layout(g)
-
-  return nodes.map(node => {
-    const { x, y } = g.node(node.id)
-    return { ...node, position: { x: x - NODE_WIDTH / 2, y: y - NODE_HEIGHT / 2 } }
-  })
-}

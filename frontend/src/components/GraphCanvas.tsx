@@ -183,10 +183,21 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
   const [layoutNodes, setLayoutNodes] = useState<Node[]>([])
   const prevStructureKeyRef = useRef('')
 
+  // Ref mirror of currentRawNodes — always up to date, but reading it inside
+  // the layout effect does not add it to that effect's dependency array.
+  // This prevents chapter scrubs from re-triggering the (expensive) layout.
+  const currentRawNodesRef = useRef(currentRawNodes)
+  useEffect(() => { currentRawNodesRef.current = currentRawNodes })
+
   // ── Effect 1: layout ─────────────────────────────────────────────────────
   // Fires only when the full-graph structure changes (characters or edges
   // added/removed). Runs the force algorithm and caches all positions so
   // subsequent chapter scrubs never need to re-layout.
+  //
+  // Immediately overlays current-chapter display data after computing positions.
+  // Without this, nodes would briefly (or permanently, if Effect 2 doesn't
+  // re-fire) show state from the layout snapshot's final chapter — e.g. a
+  // character who dies in chapter 5 appearing deceased when viewing chapter 1.
   useEffect(() => {
     const key = structureKey(layoutRawNodes, layoutEdges)
     if (key === prevStructureKeyRef.current) return
@@ -195,7 +206,11 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
     for (const n of laid) {
       savedPositionsRef.current.set(n.id, n.position)
     }
-    setLayoutNodes(laid)
+    const currentDataMap = new Map(currentRawNodesRef.current.map(n => [n.id, n.data]))
+    setLayoutNodes(laid.map(n => {
+      const d = currentDataMap.get(n.id)
+      return d ? { ...n, data: d } : n
+    }))
   }, [layoutRawNodes, layoutEdges])
 
   // ── Effect 2: data sync ───────────────────────────────────────────────────

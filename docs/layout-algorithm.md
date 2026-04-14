@@ -1,8 +1,8 @@
 # Graph Layout Algorithm — LitTree
 
-> This document specifies the ranked force layout algorithm that replaces the
-> Dagre-based layout used in the initial implementation. It is the authoritative
-> reference for implementers.
+> Authoritative reference for the ranked force layout implemented in
+> `frontend/src/lib/layout.ts`. Update this document whenever constants or
+> algorithm behaviour change.
 
 ---
 
@@ -29,7 +29,7 @@ an incremental placement strategy for new nodes.
 ## High-Level Pipeline
 
 ```
-Input: nodes[], edges[]
+Input: layoutSnapshot (final chapter — full character set)
               │
       ┌───────▼────────┐
       │  Phase 1        │  Rank assignment (topological, directed edges only)
@@ -37,13 +37,13 @@ Input: nodes[], edges[]
       └───────┬────────┘
               │ ranks: Map<id, number>
       ┌───────▼────────┐
-      │  Phase 2        │  Initial x/y positions (degree-weighted columns)
-      │  initialLayout()│
+      │  Phase 2        │  Initial x/y positions (degree-weighted columns +
+      │  initialLayout()│  crossing minimisation)
       └───────┬────────┘
               │ positions: Map<id, {x, y}>
       ┌───────▼────────┐
-      │  Phase 3        │  Force-directed refinement (spacing + edge length)
-      │  refineLayout() │
+      │  Phase 3        │  Force-directed refinement (spacing + edge length +
+      │  refineLayout() │  node-edge separation + hard separation passes)
       └───────┬────────┘
               │ positions: Map<id, {x, y}>
       ┌───────▼────────┐
@@ -51,11 +51,16 @@ Input: nodes[], edges[]
       │  override       │
       └───────┬────────┘
               │
-         Output: Node[] with final positions
+         Output: Node[] with final positions (all chapters)
 ```
 
-When **new nodes appear** (chapter scrub forward) and existing nodes already have
-positions, only Phase 4 (incremental placement) runs — existing nodes are not moved.
+**Layout is always computed on the final chapter** (complete character set) so that
+positions are stable across every timeline unit. Earlier chapters simply hide nodes
+that have not yet been introduced — positions are never re-computed on scrub.
+
+When the full-graph structure has not changed but only new nodes need placing (e.g.
+on an auto-layout after adding characters), **Phase 4** (incremental placement) runs
+instead of a full Phases 1–3 re-run.
 
 ---
 
@@ -70,47 +75,43 @@ directed-edge hierarchy. Nodes with lower rank appear higher on the canvas.
 1. Build a directed adjacency list from directed edges only.
    Undirected edges are ignored in this phase.
 
-2. Compute in-degree for each node in the directed subgraph.
+2. Detect and remove back-edges with iterative DFS (grey-coloring) so the
+   directed subgraph is a DAG for rank computation.
+   Removed edges are still drawn; they just do not influence ranks.
 
-3. Find roots: nodes with in-degree = 0.
-   If no roots exist (all nodes are in cycles), use the node with
-   the highest total degree as a synthetic root.
+3. Compute in-degree for each node in the DAG.
 
-4. BFS from roots, assigning ranks by longest path:
+4. Find roots: nodes with in-degree = 0 in the DAG.
+   If no roots exist (all nodes were in cycles), use the highest-total-degree
+   node as a synthetic root.
+
+5. BFS from roots, assigning ranks by longest path:
      rank[root] = 0
      for each node n in topological order:
        for each successor s of n:
          rank[s] = max(rank[s], rank[n] + 1)
 
-5. Cycle handling:
-   If a directed cycle is detected during the BFS:
-     - Identify the back-edge (the edge creating the cycle).
-     - Remove it from the directed graph for rank computation only
-       (it is still drawn as a normal edge).
-     - Record it so Phase 3 can still apply attraction along it.
-
 6. Nodes with NO directed edges (isolated or undirected-only):
      a. If the node has undirected-edge neighbours that already have ranks:
           rank[n] = round(average of neighbour ranks)
      b. Otherwise: rank[n] = 0
-        These nodes are placed in a "floating" layer at the top.
 ```
 
 **Output:** `Map<nodeId, rank>`
 
-### Why Longest-Path (not shortest-path)?
+### Why Longest-Path?
 
-Shortest-path layering (rank = min predecessor rank + 1) tends to compress the
-hierarchy — a character introduced late may get rank 1 even if they are several
-hops from a root. Longest-path ensures that the vertical position of a character
-reflects the full chain of directed relationships above them.
+Shortest-path layering compresses the hierarchy — a character introduced late may
+get rank 1 even if they are several hops from a root. Longest-path ensures vertical
+position reflects the full chain of directed relationships above a character.
 
 ---
 
 ## Phase 2 — Initial Position Assignment
 
 **Goal:** Translate ranks into (x, y) coordinates. Nodes in the same rank form a
-horizontal row. Within each row, high-degree nodes are centred.
+horizontal row. Within each row, high-degree nodes are centred, and edge crossings
+are minimised before the force pass begins.
 
 ### Y positions
 
@@ -118,30 +119,33 @@ horizontal row. Within each row, high-degree nodes are centred.
 y[n] = rank[n] * RANK_HEIGHT
 ```
 
-`RANK_HEIGHT` is a constant (200 px). Floating nodes (rank 0, no directed edges)
-share the top row with genuine roots.
-
 ### X positions
 
 ```
 For each rank row:
-  1. Sort nodes by total degree (in-degree + out-degree across ALL edges)
-     in descending order.
-     → High-degree characters (protagonists) go to the centre of their row.
+  1. Sort nodes by total degree (all edges, both directions) descending.
+     Re-arrange the sorted list centre-out so the highest-degree node
+     lands at the centre of the row and lower-degree nodes radiate outward.
 
-  2. Assign column indices: 0, 1, 2, … left-to-right.
-     Centre the row by offsetting:
+  2. Assign positions:
        x[i] = (i - (count - 1) / 2) * COLUMN_SPACING
 
      COLUMN_SPACING = max(MIN_NODE_DIST, 20 * avg_degree_in_row)
-     → Rows with more connections between nodes are spread wider
-       to reduce visual crossing before the force pass.
+```
 
-  3. Barycentric crossing reduction (2 passes):
-     For each adjacent pair in the row, if swapping them reduces the
-     number of crossings with the row above or below, swap them.
-     Repeat twice. This is a standard sweep heuristic — cheap and
-     effective for small graphs.
+### Crossing Minimisation
+
+After initial placement, 5 rounds of Sugiyama-style sweeps reduce edge crossings:
+
+```
+Each round:
+  1. Forward sweep  (rank 0 → max): reorder each row by barycenter of
+     neighbours in the row above.
+  2. Backward sweep (rank max → 0): reorder each row by barycenter of
+     neighbours in the row below.
+  3. Greedy adjacent-swap pass: for each row, try all neighbouring swaps;
+     keep a swap only when it strictly reduces the total crossing count
+     with both adjacent rows.
 ```
 
 **Output:** initial `Map<nodeId, {x, y}>`
@@ -151,213 +155,289 @@ For each rank row:
 ## Phase 3 — Force-Directed Refinement
 
 **Goal:** Enforce minimum separation between all node pairs, pull connected nodes
-toward their target edge length, and keep each node near its assigned rank row.
+toward their target edge length, keep each node near its assigned rank row, and
+push nodes away from edges they are not connected to.
 
-Runs for a fixed number of iterations (50–80) or until convergence (max
-displacement < 0.5 px).
+Runs for up to `MAX_ITERATIONS` (80) or stops early when max velocity drops
+below `CONVERGENCE_THRESHOLD` (0.5 px).
 
-### Forces
+### Forces (applied each iteration)
 
 #### 1. Repulsion (all pairs)
 
 ```
 F_repel = REPULSION_STRENGTH / distance²
 direction: radially away from the other node
-```
 
-If `distance < MIN_NODE_DIST / 2`, apply a hard push:
-
+If distance < MIN_NODE_DIST / 2  (very close):
+  F_repel = REPULSION_STRENGTH * 10 / distance²
 ```
-F_repel = REPULSION_STRENGTH * 10  (strong enough to always separate)
-```
-
-Complexity: O(n²) per iteration — acceptable for graphs up to ~200 nodes.
-For larger graphs, use a Barnes-Hut quadtree approximation.
 
 #### 2. Attraction (edges only)
 
 ```
 F_attract = SPRING_K * (distance - TARGET_EDGE_LENGTH)
 direction: along the edge toward the other endpoint
-```
 
-Applied only to pairs that share an edge. Directed edges use a higher
-spring constant than undirected edges (they carry more structural signal):
-
-```
-directed:   SPRING_K * 1.5
-undirected: SPRING_K * 1.0
+directed edges:   SPRING_K × 1.5
+undirected edges: SPRING_K × 1.0
 ```
 
 #### 3. Rank anchoring (vertical soft constraint)
 
 ```
-F_anchor_y = ANCHOR_K * (y_current - rank * RANK_HEIGHT)
+F_anchor_y = ANCHOR_K * (rank * RANK_HEIGHT - y_current)
 direction: toward the node's assigned rank row (y-axis only)
 ```
 
-This is the key force that preserves the topological hierarchy while allowing
-the force pass to work within each rank row. `ANCHOR_K` is kept deliberately
-low so it does not override the force-directed spacing.
+Preserves topological hierarchy while the force pass adjusts within-row spacing.
 
 #### 4. Centre gravity (prevents drift)
 
 ```
-F_gravity = GRAVITY_K * distance_from_canvas_centre
-direction: toward (0, 0)
+F_gravity_x = GRAVITY_K * -x
+F_gravity_y = GRAVITY_K * -y
+direction: toward origin (0, 0)
 ```
 
 Prevents disconnected sub-clusters from drifting off-screen.
 
+#### 5. Node-edge repulsion (routing clarity)
+
+For each movable node, if it lies within `MIN_NODE_EDGE_DIST` of any edge it is
+not connected to, push it away from the closest point on that edge segment:
+
+```
+If dist(node, edge_segment) < MIN_NODE_EDGE_DIST:
+  F_node_edge = NODE_EDGE_REPULSION * (MIN_NODE_EDGE_DIST - dist) / dist
+  direction: away from closest point on segment
+```
+
+This reduces the frequency of nodes visually sitting on top of unrelated edges.
+
 ### Integration
 
-Euler integration with velocity damping:
+Euler integration with velocity damping and per-step displacement clamping:
 
 ```
 for each iteration:
   for each node n:
     compute net force F_n (sum of all above)
-    velocity[n] += F_n * dt
-    velocity[n] *= DAMPING
+    velocity[n] = (velocity[n] + F_n) * DAMPING
+    clamp |velocity[n]| to MAX_STEP  ← prevents nodes flying off at simulation start
     position[n] += velocity[n]
 
-  converged = max(|velocity[n]|) < CONVERGENCE_THRESHOLD
-  if converged: break
+  if max(|velocity[n]|) < CONVERGENCE_THRESHOLD: break
 ```
+
+### Post-processing: Hard Separation Passes
+
+After the force loop, two separate hard-correction passes guarantee constraints
+regardless of whether the simulation fully converged:
+
+1. **Node-node separation** (30 passes): any pair closer than `MIN_NODE_DIST` is
+   pushed apart by exactly the overlap amount + 1 px safety margin.
+2. **Node-edge separation** (20 passes): any non-adjacent node within
+   `MIN_NODE_EDGE_DIST` of an edge segment is pushed away perpendicularly.
 
 ### Constants
 
-| Constant | Value | Notes |
+| Constant | Value | Rationale |
 |---|---|---|
-| `MIN_NODE_DIST` | 180 px | Hard minimum between any two node centres |
-| `TARGET_EDGE_LENGTH` | 160 px | Ideal distance for connected pairs |
-| `RANK_HEIGHT` | 200 px | Vertical gap between rank rows |
-| `COLUMN_SPACING` | max(180, degree×20) px | Horizontal gap within a rank row |
-| `REPULSION_STRENGTH` | 8 000 | Scales up with node count (×1 per 10 nodes above 20) |
-| `SPRING_K` | 0.04 | Edge attraction spring constant |
-| `ANCHOR_K` | 0.15 | Rank-row anchoring strength |
-| `GRAVITY_K` | 0.01 | Centre-pull constant |
-| `DAMPING` | 0.85 | Velocity damping per iteration |
-| `dt` | 1.0 | Time step (dimensionless) |
-| `MAX_ITERATIONS` | 80 | Hard cap on force iterations |
-| `CONVERGENCE_THRESHOLD` | 0.5 px | Stop early if all velocities below this |
+| `MIN_NODE_DIST` | 240 px | Hard floor between node centres. Node box is 120×72 px, so horizontal anchor gap ≥ 120 px and vertical gap ≥ 168 px — enough room for edge labels. |
+| `TARGET_EDGE_LENGTH` | 200 px | Spring equilibrium. At 200 px centre-to-centre: 80 px horizontal edge visible, 128 px vertical edge visible. |
+| `RANK_HEIGHT` | 220 px | Vertical gap between rank rows — matches `MIN_NODE_DIST` scale. |
+| `REPULSION_STRENGTH` | 1 200 | Scaled down from initial spec to avoid divergence at close starts. |
+| `SPRING_K` | 0.06 | Edge attraction constant. |
+| `ANCHOR_K` | 0.20 | Rank-row anchoring strength (y-axis only). |
+| `GRAVITY_K` | 0.05 | Centre-pull constant. Stronger than initial spec to keep graph compact. |
+| `DAMPING` | 0.60 | Velocity retention per step. Lower than initial spec for faster dissipation and tighter convergence. |
+| `MAX_STEP` | 80 px | Maximum displacement per node per iteration. Prevents nodes from flying off when forces are large at simulation start. |
+| `MAX_ITERATIONS` | 80 | Hard cap on force iterations. |
+| `CONVERGENCE_THRESHOLD` | 0.5 px | Early-exit when max velocity is below this. |
+| `MIN_NODE_EDGE_DIST` | 60 px | Minimum distance from a node centre to any non-adjacent edge. |
+| `NODE_EDGE_REPULSION` | 800 | Magnitude of the node-edge repulsion force. |
 
 ---
 
 ## Phase 4 — Incremental New Node Placement
 
-**Goal:** When the chapter scrubber advances and new characters appear, place them
-near their existing neighbours without moving any already-positioned node.
-
-This phase replaces a full re-layout for structural changes where existing nodes
-already have persisted (dragged or previously laid-out) positions.
+**Goal:** When the auto-layout is triggered after new characters have been added,
+place only the new nodes near their existing neighbours without moving any
+already-positioned node.
 
 ### Trigger condition
 
 ```
-structureKey has changed (new node IDs present)
-AND at least one existing node has a saved position
+at least one existing node has a saved position
+AND new nodes are present (not in savedPositions)
 ```
 
 ### Algorithm
 
 ```
-For each new node n (nodes not in existingPositions):
+For each new node n:
 
   neighbours = all nodes connected to n by any edge
 
   if neighbours is non-empty:
-    seed = average position of neighbours that have positions
-    
-    // Find the direction with the most open space
-    directions = 8 cardinal + diagonal directions (0°, 45°, 90°, …, 315°)
-    for each direction d:
-      score[d] = count of existing nodes within (MIN_NODE_DIST * 2)
-                 in a 90° cone around d from seed
+    seed = average position of already-positioned neighbours
+
+    // Find the direction with the most open space (fewest nodes in cone)
+    for each of 8 directions (0°, 45°, 90°, …, 315°):
+      score = count of nodes within MIN_NODE_DIST * 2 in a 90° cone
     best_direction = direction with lowest score
-    
+
     candidate = seed + best_direction * TARGET_EDGE_LENGTH
 
-    // Resolve any remaining overlap by nudging outward
-    while any existing node is within MIN_NODE_DIST of candidate:
-      candidate += best_direction * 20
+    // Nudge outward until clear of all existing nodes
+    repeat up to 50 times:
+      if any existing node within MIN_NODE_DIST of candidate:
+        candidate += best_direction * (overlap + 1)
 
   else:
-    // No neighbours — place at the least-dense periphery
-    divide canvas bounding box into a 4×4 grid
-    pick the cell with fewest nodes
-    candidate = centre of that cell + small random jitter
+    // No positioned neighbours — find the least-dense cell in a 4×4 grid
+    divide canvas bounding box into 4×4 grid
+    candidate = centre of cell with fewest nearby nodes
 
-  existingPositions[n.id] = candidate
+  savedPositions[n.id] = candidate
 
-// After all new nodes are placed, run 20 force iterations
-// with existing nodes frozen as immovable anchors.
-runForceIterations(positions, frozenIds = existingIds, iterations = 20)
+// Run Phase 3 with all pre-existing nodes frozen as anchors (20 iterations)
+refineLayout(positions, frozenIds = existingIds)
 ```
 
-**Output:** positions for new nodes only; existing positions unchanged.
+---
+
+## Position Caching and Timeline Stability
+
+After every layout computation (Phases 1–3 or Phase 4), **all resulting positions
+are written back into `savedPositionsRef`**. This means:
+
+- The force algorithm runs exactly once for the full graph (on first load or after
+  an explicit auto-layout).
+- When the user scrubs to an earlier chapter, every character in that chapter
+  already has a cached position — `applyLayout` finds no new nodes and returns
+  immediately without running any force iterations.
+- User-dragged positions overwrite cached positions and are also persisted to
+  `localStorage` under `litree:positions:<seriesId>`.
 
 ---
 
 ## Auto-Layout
 
-An **Auto Layout** button in the UI triggers a full Phase 1–3 re-layout, ignoring
-all saved positions. This is useful when the user has manually arranged nodes into
-a messy state, or after importing a large graph.
+An **Auto Layout** button in `ZoomControls` triggers a full Phase 1–3 re-layout on
+the complete character set, ignoring all saved positions.
 
 Behaviour:
-1. Clear `savedPositions` for the current series from localStorage.
-2. Run Phases 1–3 on the current node/edge set.
-3. Write results to `layoutNodes` — the animation hook transitions all nodes to
-   their new positions over 500 ms.
-
-The button lives in `ZoomControls` (bottom-right of the canvas) alongside Zoom In,
-Zoom Out, and Fit View.
+1. Clear `savedPositionsRef` and `localStorage` entry for the series.
+2. Run Phases 1–3 on `layoutRawNodes` and `layoutEdges` (always the full graph).
+3. Write all new positions back to `savedPositionsRef`.
+4. The `useAnimatedLayout` hook transitions all nodes to their new positions
+   over ~500 ms.
 
 ---
 
-## Edge Rendering Notes
+## Edge Rendering — Bezier Curves with Closest-Anchor Heuristic
 
-The layout algorithm positions nodes. Edge rendering is handled separately in
-`RelationshipEdge.tsx`, but the layout influences edge clarity:
+Edge rendering is handled in `RelationshipEdge.tsx`. The layout positions node
+centres; the edge component independently computes where to attach.
 
-- **Straight edges** should be the default for all relationship types.
-  React Flow's `StraightEdge` or a custom SVG path from source handle centre
-  to target handle centre, with no bezier control points.
-- **Parallel edges** (two or more edges between the same pair of nodes) should
-  be slightly offset (perpendicular to the straight line) to remain individually
-  readable. Offset amount: 12 px per parallel edge, applied symmetrically.
-- The force refinement's `TARGET_EDGE_LENGTH` naturally separates connected
-  pairs enough that labels can be placed at the edge midpoint without overlap.
+### Anchor Points
+
+Each node exposes **4 candidate anchor points** — the midpoints of its top,
+bottom, left, and right sides — computed from the node's absolute canvas position
+and measured dimensions (fallback: 120×72 px).
+
+```
+Top:    (cx,     ny)
+Bottom: (cx,     ny + h)
+Left:   (nx,     cy)
+Right:  (nx + w, cy)
+```
+
+### Closest-Pair Heuristic
+
+For each edge, all 16 combinations (4 source anchors × 4 target anchors) are
+evaluated. The pair with the **minimum squared distance** is chosen. The winning
+`Position` enum value (`Top`/`Bottom`/`Left`/`Right`) drives the direction of the
+bezier control-point handle, so the curve exits and enters perpendicular to the
+chosen face.
+
+```
+for s in source_anchors:
+  for t in target_anchors:
+    d² = (s.x - t.x)² + (s.y - t.y)²
+    if d² < best: best = (s, t)
+
+[edgePath, labelX, labelY] = getBezierPath({
+  sourceX: best.s.x, sourceY: best.s.y, sourcePosition: best.s.position,
+  targetX: best.t.x, targetY: best.t.y, targetPosition: best.t.position,
+  curvature,
+})
+```
+
+### Parallel Edges
+
+Multiple edges between the same node pair attach to the same anchor points but
+use different `curvature` values so they fan out visually:
+
+```
+curvature = BASE_CURVATURE + (parallelIndex - (parallelCount - 1) / 2) × PARALLEL_CURVATURE_STEP
+BASE_CURVATURE        = 0.25
+PARALLEL_CURVATURE_STEP = 0.35
+```
+
+---
+
+## GraphCanvas Architecture
+
+```
+App.tsx
+  ├─ useGraphData(SERIES_ID, currentUnit)    ← display snapshot (current chapter)
+  ├─ useGraphData(SERIES_ID, totalUnits)     ← layout snapshot (final chapter, from cache)
+  └─ <GraphCanvas snapshot layoutSnapshot />
+
+GraphCanvas.tsx
+  ├─ layoutRawNodes / layoutEdges            ← from layoutSnapshot (full graph)
+  ├─ currentRawNodes                         ← from snapshot (current chapter, data sync only)
+  ├─ visibleIds / visibleEdges               ← filtered by atUnit + showDeceased
+  │
+  ├─ Effect 1: layout  [layoutRawNodes, layoutEdges]
+  │    structureKey changed → applyLayout → cache all positions
+  │
+  └─ Effect 2: data sync  [currentRawNodes]
+       update node .data (name, alive/deceased, selection) — no position changes
+```
 
 ---
 
 ## File Structure
 
 ```
-frontend/src/lib/layout.ts         ← replaces the current Dagre implementation
-  assignRanks()
-  initialLayout()
-  refineLayout()
-  placeNewNodes()
-  applyLayout()                    ← top-level entry point (replaces applyDagreLayout)
+frontend/src/lib/layout.ts
+  assignRanks()        Phase 1 — exported for unit tests
+  initialLayout()      Phase 2 — exported for unit tests
+  refineLayout()       Phase 3 — exported for unit tests
+  placeNewNodes()      Phase 4 — exported for unit tests
+  applyLayout()        Top-level entry point (used by GraphCanvas)
+  LAYOUT_CONSTANTS     All tunable constants in one object
 
 frontend/src/components/
-  GraphCanvas.tsx                  ← add handleAutoLayout callback, pass to ZoomControls
-  ZoomControls.tsx                 ← add Auto Layout button
+  GraphCanvas.tsx      layoutSnapshot prop; two-effect layout+data-sync pattern
+  RelationshipEdge.tsx Bezier edges with closest-anchor heuristic
+  ZoomControls.tsx     Auto Layout button
 ```
 
 ---
 
 ## Testing Strategy
 
-Each phase is a pure function operating on plain data structures — all are unit-testable
-without a DOM or React Flow instance.
+Each phase is a pure function — all are unit-testable without a DOM or React Flow.
 
 | Test file | Coverage |
 |---|---|
-| `layout.test.ts` (already exists) | Extend with Phase 1–4 tests |
-| Phase 1 | Roots identified correctly; ranks respect longest path; cycles handled |
-| Phase 2 | High-degree node is centred; rows spaced by `COLUMN_SPACING` |
-| Phase 3 | No pair closer than `MIN_NODE_DIST` after refinement; convergence within `MAX_ITERATIONS` |
-| Phase 4 | New node placed ≥ `MIN_NODE_DIST` from all existing; neighbours within 2× `TARGET_EDGE_LENGTH` |
+| `layout.test.ts` | Phase 1–4 + `applyLayout` integration |
+| Phase 1 | Roots identified; ranks respect longest path; cycle back-edge removed; isolated node gets rank 0 |
+| Phase 2 | High-degree node centred; row width scales with degree |
+| Phase 3 | No pair closer than `MIN_NODE_DIST` after refinement; converges within `MAX_ITERATIONS` |
+| Phase 4 | New node ≥ `MIN_NODE_DIST` from all existing; placed near neighbours |
