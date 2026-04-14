@@ -15,4 +15,5 @@ type Store interface {
 	GetAllSeries(ctx context.Context) ([]domain.Series, error)
 	GetSeriesByID(ctx context.Context, id uuid.UUID) (domain.Series, error)
 	GetGraphSnapshot(ctx context.Context, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error)
+	GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error)
 }

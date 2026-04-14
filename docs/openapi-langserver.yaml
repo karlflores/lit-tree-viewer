@@ -1,0 +1,933 @@
+openapi: 3.1.0
+
+info:
+  title: LTG Language Server
+  version: 0.1.0
+  description: |
+    The `ltg-langserver` binary exposes three concurrent transports on the same
+    Tokio runtime:
+
+    | Transport | Endpoint | Purpose |
+    |-----------|----------|---------|
+    | **HTTP** | `POST /compile` | One-shot stateless compilation |
+    | **HTTP** | `GET /health` | Health check |
+    | **WebSocket** | `GET /ws` | Full JSON-RPC 2.0 LSP session (browser / Monaco) |
+    | **Stdio** | stdin/stdout | Full JSON-RPC 2.0 LSP session (VSCode / CLI) |
+
+    ### Compiler Pipeline
+
+    Every compilation (whether triggered by an HTTP POST or an LSP document change)
+    runs the same four-phase pipeline:
+
+    ```
+    Source text
+       ↓ Lex  — tokenise, insert synthetic INDENT/DEDENT tokens, collect LexErrors
+       ↓ Parse — recursive descent (chumsky), build AST, collect ParseErrors
+       ↓ Check — semantic validation, collect CheckErrors / CheckWarnings
+       ↓ Compile — produce CompiledGraph (only if no errors exist)
+    ```
+
+    All phases run to completion; errors from every phase are accumulated and
+    returned together.
+
+    ### LSP Transport Details
+
+    #### Stdio
+    Standard Content-Length-delimited JSON-RPC 2.0 frames as per the
+    [LSP specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/).
+
+    #### WebSocket (`GET /ws`)
+    Bare JSON text frames — no Content-Length header. The server bridges
+    internally between WS frames and Content-Length framing so the same
+    `tower-lsp` backend handles both transports identically.
+
+    #### Runtime configuration
+
+    | Environment variable | Default | Description |
+    |----------------------|---------|-------------|
+    | `LTG_HTTP_ADDR` | `0.0.0.0:4000` | Bind address for the HTTP + WebSocket server |
+
+servers:
+  - url: http://localhost:4000
+    description: Local development server
+
+tags:
+  - name: HTTP
+    description: Stateless HTTP endpoints
+  - name: WebSocket
+    description: WebSocket upgrade — full LSP session
+  - name: LSP Protocol
+    description: |
+      JSON-RPC 2.0 methods sent over the WebSocket or stdio transports.
+      These are not HTTP endpoints; they are documented here as pseudo-paths
+      for discoverability. The method name is always carried in the JSON-RPC
+      `method` field.
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      tags: [HTTP]
+      responses:
+        '200':
+          description: Server is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+
+  /compile:
+    post:
+      summary: One-shot LTG compilation
+      operationId: compile
+      tags: [HTTP]
+      description: |
+        Accepts a raw `.ltg` source text body, runs the full compiler pipeline,
+        and returns either a compiled graph or a list of diagnostics.
+
+        This endpoint is stateless — no document is stored and no LSP session
+        is required.
+      requestBody:
+        required: true
+        description: Raw `.ltg` source text (UTF-8).
+        content:
+          text/plain:
+            schema:
+              type: string
+            example: |
+              metadata title:  "My Series"
+              metadata media:  book
+              set block: chapter
+              init:
+                  actor alice: "Alice"
+                  actor bob:   "Bob"
+                  link ally(alice -- bob)
+      responses:
+        '200':
+          description: |
+            Compilation succeeded (zero errors). Returns the full compiled graph.
+            Warnings may still be present; check `diagnostics` on the 422 body
+            if you need them — the 200 body does not carry warnings.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompiledGraph'
+        '422':
+          description: |
+            Compilation failed (one or more errors). Returns the diagnostic list.
+            Warnings are included alongside errors.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompileErrorResponse'
+
+  /ws:
+    get:
+      summary: WebSocket LSP session
+      operationId: connectWebSocket
+      tags: [WebSocket]
+      description: |
+        Upgrades the HTTP connection to a WebSocket. Each connection receives
+        an isolated LSP backend with its own in-memory document store.
+
+        **Frame format**: bare JSON text frames (no Content-Length header).
+        The body of each frame is a standard JSON-RPC 2.0 message object.
+
+        Begin with the standard LSP handshake:
+        1. Client sends `initialize` request.
+        2. Server responds with `InitializeResult`.
+        3. Client sends `initialized` notification.
+        4. Normal operation: `textDocument/didOpen`, `textDocument/didChange`,
+           `textDocument/didClose`, `workspace/executeCommand`.
+
+        See the **LSP Protocol** section for all supported methods.
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket connection established.
+        '400':
+          description: Not a valid WebSocket upgrade request.
+
+  # ── LSP methods documented as pseudo-paths ────────────────────────────────
+
+  /lsp/initialize:
+    post:
+      summary: "LSP: initialize (request)"
+      operationId: lspInitialize
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `initialize`
+
+        Sent by the client as the first message of every session.
+        The server responds with its capabilities.
+
+        **Declared capabilities:**
+        - `textDocumentSync`: `FULL` (entire file content on every change)
+        - `executeCommandProvider.commands`: `["ltg.compile"]`
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcRequest'
+            example:
+              jsonrpc: "2.0"
+              id: 1
+              method: "initialize"
+              params:
+                processId: 12345
+                rootUri: "file:///home/user/project"
+                capabilities: {}
+      responses:
+        '200':
+          description: InitializeResult
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonRpcResponse'
+              example:
+                jsonrpc: "2.0"
+                id: 1
+                result:
+                  capabilities:
+                    textDocumentSync: 1
+                    executeCommandProvider:
+                      commands: ["ltg.compile"]
+                  serverInfo:
+                    name: "ltg-langserver"
+                    version: "0.1.0"
+
+  /lsp/initialized:
+    post:
+      summary: "LSP: initialized (notification)"
+      operationId: lspInitialized
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `initialized`
+
+        Client notification confirming that initialization is complete.
+        No response is sent.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcNotification'
+            example:
+              jsonrpc: "2.0"
+              method: "initialized"
+              params: {}
+      responses:
+        '200':
+          description: No response (notification).
+
+  /lsp/textDocument/didOpen:
+    post:
+      summary: "LSP: textDocument/didOpen (notification)"
+      operationId: lspDidOpen
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `textDocument/didOpen`
+
+        Registers a document in the session's in-memory store and immediately
+        runs the compiler pipeline, publishing diagnostics via
+        `textDocument/publishDiagnostics`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcNotification'
+            example:
+              jsonrpc: "2.0"
+              method: "textDocument/didOpen"
+              params:
+                textDocument:
+                  uri: "file:///home/user/project/series.ltg"
+                  languageId: "ltg"
+                  version: 1
+                  text: "metadata title: \"My Series\"\nmetadata media: book\n"
+      responses:
+        '200':
+          description: |
+            No direct response. The server sends a `textDocument/publishDiagnostics`
+            notification asynchronously.
+
+  /lsp/textDocument/didChange:
+    post:
+      summary: "LSP: textDocument/didChange (notification)"
+      operationId: lspDidChange
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `textDocument/didChange`
+
+        Updates the stored document with the new full content and re-runs
+        the pipeline. Uses `FULL` sync — `contentChanges` must contain exactly
+        one element with the entire file text.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcNotification'
+            example:
+              jsonrpc: "2.0"
+              method: "textDocument/didChange"
+              params:
+                textDocument:
+                  uri: "file:///home/user/project/series.ltg"
+                  version: 2
+                contentChanges:
+                  - text: "metadata title: \"Updated\"\nmetadata media: book\n"
+      responses:
+        '200':
+          description: |
+            No direct response. The server sends a `textDocument/publishDiagnostics`
+            notification asynchronously.
+
+  /lsp/textDocument/didClose:
+    post:
+      summary: "LSP: textDocument/didClose (notification)"
+      operationId: lspDidClose
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `textDocument/didClose`
+
+        Removes the document from the session store and publishes an empty
+        diagnostic array to clear any editor markers.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcNotification'
+            example:
+              jsonrpc: "2.0"
+              method: "textDocument/didClose"
+              params:
+                textDocument:
+                  uri: "file:///home/user/project/series.ltg"
+      responses:
+        '200':
+          description: |
+            No direct response. The server sends a `textDocument/publishDiagnostics`
+            notification with an empty array to clear editor markers.
+
+  /lsp/textDocument/publishDiagnostics:
+    post:
+      summary: "LSP: textDocument/publishDiagnostics (server → client notification)"
+      operationId: lspPublishDiagnostics
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `textDocument/publishDiagnostics`
+
+        Sent **by the server** to the client after every `didOpen` / `didChange`
+        (and with an empty array after `didClose`).
+
+        All positions are **0-based** (line and character).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcNotification'
+            example:
+              jsonrpc: "2.0"
+              method: "textDocument/publishDiagnostics"
+              params:
+                uri: "file:///home/user/project/series.ltg"
+                diagnostics:
+                  - range:
+                      start: { line: 0, character: 0 }
+                      end:   { line: 0, character: 8 }
+                    severity: 1
+                    code: "MissingMetadata"
+                    source: "ltg-langserver"
+                    message: "Missing required metadata: title"
+      responses:
+        '200':
+          description: Client processes the notification; no response sent.
+
+  /lsp/workspace/executeCommand:
+    post:
+      summary: "LSP: workspace/executeCommand (request)"
+      operationId: lspExecuteCommand
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `workspace/executeCommand`
+
+        Executes a named server-side command. Only `"ltg.compile"` is supported.
+
+        ### `ltg.compile`
+
+        Compiles the currently open document identified by the URI in `arguments[0]`.
+
+        **Arguments**: `[<document_uri: string>]`
+
+        **Success** (no errors): returns a `CompiledGraph` object.
+
+        **Failure** (errors present): returns `{ "errors": [...] }` with the
+        diagnostic list.
+
+        The document must already be open (registered via `textDocument/didOpen`).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcRequest'
+            example:
+              jsonrpc: "2.0"
+              id: 42
+              method: "workspace/executeCommand"
+              params:
+                command: "ltg.compile"
+                arguments:
+                  - "file:///home/user/project/series.ltg"
+      responses:
+        '200':
+          description: Command result — either a CompiledGraph or an error list.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/JsonRpcCommandSuccess'
+                  - $ref: '#/components/schemas/JsonRpcCommandError'
+                  - $ref: '#/components/schemas/JsonRpcError'
+              examples:
+                success:
+                  summary: Compilation succeeded
+                  value:
+                    jsonrpc: "2.0"
+                    id: 42
+                    result:
+                      series:
+                        title: "My Series"
+                        mediaType: "book"
+                        unitLabel: "Chapter"
+                        totalUnits: 2
+                        author: null
+                        groupType: null
+                      characters:
+                        - identifier: "alice"
+                          name: "Alice"
+                          aliases: []
+                          renames: []
+                          introducedAt: 1
+                          diedAt: null
+                      relationships:
+                        - fromIdentifier: "alice"
+                          toIdentifier: "bob"
+                          label: "ally"
+                          directed: false
+                          introducedAt: 1
+                          endedAt: null
+                      colours:
+                        ally: "#60a5fa"
+                      blocks:
+                        - index: 1
+                          label: null
+                          groupLabel: null
+                        - index: 2
+                          label: null
+                          groupLabel: null
+                failure:
+                  summary: Compilation failed
+                  value:
+                    jsonrpc: "2.0"
+                    id: 42
+                    result:
+                      errors:
+                        - severity: 1
+                          code: "UndeclaredActor"
+                          message: "Actor 'unknown' has not been declared"
+                rpcError:
+                  summary: Unknown document URI
+                  value:
+                    jsonrpc: "2.0"
+                    id: 42
+                    error:
+                      code: -32602
+                      message: "invalid params: document not open"
+
+  /lsp/shutdown:
+    post:
+      summary: "LSP: shutdown (request)"
+      operationId: lspShutdown
+      tags: [LSP Protocol]
+      description: |
+        **JSON-RPC method**: `shutdown`
+
+        Requests the server to shut down. The server responds with `null`
+        and then waits for an `exit` notification.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcRequest'
+            example:
+              jsonrpc: "2.0"
+              id: 99
+              method: "shutdown"
+      responses:
+        '200':
+          description: Shutdown acknowledged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonRpcResponse'
+              example:
+                jsonrpc: "2.0"
+                id: 99
+                result: null
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+  schemas:
+
+    # ── HTTP ─────────────────────────────────────────────────────────────────
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+
+    CompileErrorResponse:
+      type: object
+      required: [diagnostics]
+      properties:
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/HttpDiagnostic'
+
+    HttpDiagnostic:
+      type: object
+      required: [severity, code, message, range]
+      description: |
+        A compiler diagnostic returned by `POST /compile` on a 422 response.
+        Positions are **0-based**.
+      properties:
+        severity:
+          type: integer
+          enum: [1, 2]
+          description: "`1` = error, `2` = warning."
+        code:
+          $ref: '#/components/schemas/DiagnosticCode'
+        message:
+          type: string
+          description: Human-readable description of the problem.
+          example: "Actor 'alice' has already been declared"
+        range:
+          $ref: '#/components/schemas/LspRange'
+
+    # ── Compiled graph ────────────────────────────────────────────────────────
+
+    CompiledGraph:
+      type: object
+      required: [series, characters, relationships, colours, blocks]
+      description: |
+        The fully compiled representation of an LTG file. Produced only when
+        there are zero errors.
+
+        Unlike the Go API's `GraphSnapshot`, this model is **not time-sliced**
+        — it carries the full history of every entity. Characters and
+        relationships include their temporal bounds (`introducedAt`, `endedAt`),
+        allowing the consumer to filter for any unit they choose.
+
+        Actor references use `identifier` (the LTG source token) instead of
+        database UUIDs; the Go API's import endpoint maps these to UUIDs during
+        ingestion.
+      properties:
+        series:
+          $ref: '#/components/schemas/CompiledSeries'
+        characters:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompiledCharacter'
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompiledRelationship'
+        colours:
+          type: object
+          additionalProperties:
+            type: string
+            pattern: '^#[0-9a-fA-F]{6}$'
+          description: |
+            Map of relationship label → hex colour string.
+            Each label is either explicitly overridden via `set colour:` in
+            the LTG source, or assigned a deterministic colour from a 12-colour
+            palette using FNV-1a hashing on the label string.
+          example:
+            ally: "#60a5fa"
+            rivals: "#f87171"
+        blocks:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompiledBlock'
+          description: |
+            All narrative units in declaration order, 1-indexed.
+            `init:` = block 1. Each `new <type>:` increments the index.
+
+    CompiledSeries:
+      type: object
+      required: [title, mediaType, unitLabel, totalUnits]
+      properties:
+        title:
+          type: string
+          example: "Wuthering Heights"
+        mediaType:
+          type: string
+          enum: [book, show, film]
+        unitLabel:
+          type: string
+          description: |
+            Human-readable label for one unit (e.g. `"Chapter"`, `"Episode"`).
+            Derived by title-casing the `set block: <type>` identifier, or
+            taken verbatim from `set block: <type> = "<display>"`.
+          example: "Chapter"
+        totalUnits:
+          type: integer
+          minimum: 1
+          example: 34
+        author:
+          type: string
+          nullable: true
+          example: "Emily Brontë"
+        groupType:
+          type: string
+          nullable: true
+          description: Display label for the container level (`set group:`).
+          example: "Season"
+
+    CompiledCharacter:
+      type: object
+      required: [identifier, name, aliases, renames, introducedAt, diedAt]
+      properties:
+        identifier:
+          type: string
+          description: |
+            The LTG source identifier (e.g. `heathcliff`). Used as the key in
+            relationship `fromIdentifier` / `toIdentifier` fields.
+          example: "heathcliff"
+        name:
+          type: string
+          description: The character's base display name from their `actor` declaration.
+          example: "Heathcliff"
+        aliases:
+          type: array
+          items:
+            type: string
+          description: Additional names declared with `alias` statements.
+          example: []
+        renames:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompiledRename'
+          description: All rename events in declaration order.
+        introducedAt:
+          type: integer
+          minimum: 1
+          description: Block index at which the `actor` declaration appears.
+          example: 1
+        diedAt:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Block index of the `deceased` statement, or `null`.
+          example: null
+
+    CompiledRename:
+      type: object
+      required: [name, introducedAt]
+      properties:
+        name:
+          type: string
+          example: "The Hound"
+        introducedAt:
+          type: integer
+          minimum: 1
+          example: 5
+
+    CompiledRelationship:
+      type: object
+      required: [fromIdentifier, toIdentifier, label, directed, introducedAt, endedAt]
+      properties:
+        fromIdentifier:
+          type: string
+          description: LTG identifier of the source character.
+          example: "alice"
+        toIdentifier:
+          type: string
+          description: LTG identifier of the target character.
+          example: "bob"
+        label:
+          type: string
+          description: Relationship label from the `link` statement.
+          example: "childhood_friends"
+        directed:
+          type: boolean
+          description: "`true` if declared with `->`, `false` if with `--`."
+          example: false
+        introducedAt:
+          type: integer
+          minimum: 1
+          description: Block index of the `link` statement.
+          example: 1
+        endedAt:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Block index of the `unlink` statement, or `null`.
+          example: null
+
+    CompiledBlock:
+      type: object
+      required: [index, label, groupLabel]
+      properties:
+        index:
+          type: integer
+          minimum: 1
+          description: Global sequential block index (1 = `init:`).
+          example: 3
+        label:
+          type: string
+          nullable: true
+          description: Optional display label from `new chapter: "The Storm"`.
+          example: "The Storm"
+        groupLabel:
+          type: string
+          nullable: true
+          description: Label of the enclosing `group "..."` block, or `null`.
+          example: "Season 1"
+
+    # ── Diagnostic codes ──────────────────────────────────────────────────────
+
+    DiagnosticCode:
+      type: string
+      description: |
+        Machine-readable identifier for the diagnostic. Errors have severity `1`,
+        warnings have severity `2`.
+
+        | Code | Severity | Phase | Description |
+        |------|----------|-------|-------------|
+        | `InvalidIndentation` | error | Lexer | Tab character used, or indentation is not a multiple of 4 spaces |
+        | `SyntaxError` | error | Lexer/Parser | Unexpected character or token sequence |
+        | `MissingMetadata` | error | Checker | Required `metadata title:` or `metadata media:` is absent |
+        | `DuplicateMetadata` | error | Checker | Same metadata key appears more than once |
+        | `InvalidMediaType` | error | Checker | `media:` value is not `book`, `show`, or `film` |
+        | `MissingBlockDeclaration` | error | Checker | No `set block: <type>` directive present |
+        | `DuplicateBlockDeclaration` | error | Checker | Multiple `set block:` directives |
+        | `InvalidDisplayLabel` | error | Checker | Empty string passed to `set block: <type> = ""` |
+        | `WrongBlockType` | error | Checker | `new <type>:` doesn't match the declared block type |
+        | `MissingInit` | error | Checker | No `init:` block present |
+        | `DuplicateInit` | error | Checker | Multiple `init:` blocks |
+        | `UnlinkInInit` | error | Checker | `unlink` statement inside `init:` block |
+        | `DeceasedInInit` | error | Checker | `deceased` statement inside `init:` block |
+        | `RenameInInit` | error | Checker | `rename` statement inside `init:` block |
+        | `UndeclaredActor` | error | Checker | Actor identifier used before its `actor` declaration |
+        | `DuplicateActor` | error | Checker | Same actor identifier declared more than once |
+        | `AlreadyDeceased` | error | Checker | `deceased` applied to an actor who is already deceased |
+        | `NoSuchRelationship` | error | Checker | `unlink` references a label+pair that has no active `link` |
+        | `DuplicateRelationship` | error | Checker | `link` with the same label and actor pair already active |
+        | `InvalidColour` | error | Checker | `set colour:` hex value doesn't match `#rrggbb` |
+        | `RenameDeceased` | warning | Checker | `rename` applied to an already-deceased actor |
+        | `UnusedColourOverride` | warning | Checker | `set colour:` label is never used in any `link` statement |
+      enum:
+        - InvalidIndentation
+        - SyntaxError
+        - MissingMetadata
+        - DuplicateMetadata
+        - InvalidMediaType
+        - MissingBlockDeclaration
+        - DuplicateBlockDeclaration
+        - InvalidDisplayLabel
+        - WrongBlockType
+        - MissingInit
+        - DuplicateInit
+        - UnlinkInInit
+        - DeceasedInInit
+        - RenameInInit
+        - UndeclaredActor
+        - DuplicateActor
+        - AlreadyDeceased
+        - NoSuchRelationship
+        - DuplicateRelationship
+        - InvalidColour
+        - RenameDeceased
+        - UnusedColourOverride
+
+    # ── LSP position / range ─────────────────────────────────────────────────
+
+    LspPosition:
+      type: object
+      required: [line, character]
+      description: A cursor position. Both fields are **0-based**.
+      properties:
+        line:
+          type: integer
+          minimum: 0
+          example: 4
+        character:
+          type: integer
+          minimum: 0
+          example: 12
+
+    LspRange:
+      type: object
+      required: [start, end]
+      properties:
+        start:
+          $ref: '#/components/schemas/LspPosition'
+        end:
+          $ref: '#/components/schemas/LspPosition'
+
+    LspDiagnostic:
+      type: object
+      required: [range, severity, code, source, message]
+      description: |
+        Standard LSP `Diagnostic` object published via
+        `textDocument/publishDiagnostics`. Positions are **0-based**.
+      properties:
+        range:
+          $ref: '#/components/schemas/LspRange'
+        severity:
+          type: integer
+          enum: [1, 2, 3]
+          description: "`1` = Error, `2` = Warning, `3` = Information."
+        code:
+          $ref: '#/components/schemas/DiagnosticCode'
+        source:
+          type: string
+          enum: ["ltg-langserver"]
+        message:
+          type: string
+          example: "Actor 'alice' has already been declared"
+
+    # ── JSON-RPC 2.0 envelopes ────────────────────────────────────────────────
+
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, id, method]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+          description: Request identifier. Must be echoed in the response.
+        method:
+          type: string
+        params:
+          description: Method-specific parameters object or array.
+
+    JsonRpcNotification:
+      type: object
+      required: [jsonrpc, method]
+      description: A JSON-RPC message with no `id` field — no response is sent.
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        method:
+          type: string
+        params:
+          description: Method-specific parameters.
+
+    JsonRpcResponse:
+      type: object
+      required: [jsonrpc, id, result]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+        result:
+          description: Method-specific result value.
+
+    JsonRpcError:
+      type: object
+      required: [jsonrpc, id, error]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: integer
+              description: |
+                Standard JSON-RPC error codes used by the server:
+
+                | Code | Constant | Trigger |
+                |------|----------|---------|
+                | `-32601` | `MethodNotFound` | Unknown command name in `workspace/executeCommand` |
+                | `-32602` | `InvalidParams` | Malformed URI, missing argument, or document not open |
+                | `-32603` | `InternalError` | Serialisation failure |
+              enum: [-32601, -32602, -32603]
+            message:
+              type: string
+
+    JsonRpcCommandSuccess:
+      type: object
+      required: [jsonrpc, id, result]
+      description: Successful `ltg.compile` result — `result` is a `CompiledGraph`.
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+        result:
+          $ref: '#/components/schemas/CompiledGraph'
+
+    JsonRpcCommandError:
+      type: object
+      required: [jsonrpc, id, result]
+      description: |
+        Failed `ltg.compile` result — `result` contains an `errors` array.
+        Note: this is **not** a JSON-RPC error response; the RPC call itself
+        succeeded, but the document had compile errors.
+      properties:
+        jsonrpc:
+          type: string
+          enum: ["2.0"]
+        id:
+          oneOf:
+            - type: integer
+            - type: string
+        result:
+          type: object
+          required: [errors]
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required: [severity, code, message]
+                properties:
+                  severity:
+                    type: integer
+                    enum: [1, 2]
+                  code:
+                    $ref: '#/components/schemas/DiagnosticCode'
+                  message:
+                    type: string

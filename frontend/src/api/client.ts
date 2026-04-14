@@ -1,5 +1,6 @@
 import { err, ok, type Result } from 'neverthrow'
 import type { ApiError, GraphSnapshot, Series } from '../types/domain'
+import type { CompileSuccess } from '../lib/ltgLspClient'
 
 const BASE = '/api'
 
@@ -25,3 +26,8 @@ export const fetchGraphSnapshot = (
   atUnit: number,
 ): Promise<Result<GraphSnapshot, ApiError>> =>
   request<GraphSnapshot>(`/series/${seriesId}/graph?at=${atUnit}`)
+
+export const fetchCompiledGraph = (
+  seriesId: string,
+): Promise<Result<CompileSuccess, ApiError>> =>
+  request<CompileSuccess>(`/series/${seriesId}/compiled`)

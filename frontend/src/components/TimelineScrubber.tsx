@@ -36,9 +36,12 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
 
   const [rawProgress, setRawProgress]           = useState<number | null>(null)
   const [pressPreviewUnit, setPressPreviewUnit] = useState<number | null>(null)
-  // hoverUnit: chapter under cursor. hoverReady: true after HOVER_DELAY_MS on the track.
-  const [hoverUnit, setHoverUnit]   = useState<number | null>(null)
-  const [hoverReady, setHoverReady] = useState(false)
+  // hoverUnit: chapter under cursor on the track region (null when over buttons).
+  // overButton: cursor is inside the pill but over a prev/next button, not the track.
+  // hoverReady: true after HOVER_DELAY_MS — gates the label so it only appears on intentional hover.
+  const [hoverUnit,   setHoverUnit]   = useState<number | null>(null)
+  const [overButton,  setOverButton]  = useState(false)
+  const [hoverReady,  setHoverReady]  = useState(false)
 
   const dragging        = rawProgress !== null
   const totalUnits      = series.totalUnits
@@ -50,7 +53,8 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
     : currentUnit
 
   // Label is active for drag/press immediately; for hover only after the delay.
-  const showLabel = dragging || pressPreviewUnit !== null || (hoverUnit !== null && hoverReady)
+  // overButton counts as "hovering" for visibility but activeUnit falls through to currentUnit.
+  const showLabel = dragging || pressPreviewUnit !== null || ((hoverUnit !== null || overButton) && hoverReady)
 
   // The unit and progress the label should logically track right now.
   const activeUnit     = dragging ? previewUnit : (pressPreviewUnit ?? hoverUnit ?? currentUnit)
@@ -126,29 +130,35 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
     if (track) {
       const { left, right } = track.getBoundingClientRect()
       if (e.clientX < left || e.clientX > right) {
-        setHoverUnit(currentUnit)
+        setHoverUnit(null)
+        setOverButton(true)
       } else {
         setHoverUnit(unitFromClientX(e.clientX))
+        setOverButton(false)
       }
     }
     hoverTimerRef.current = setTimeout(() => setHoverReady(true), HOVER_DELAY_MS)
-  }, [unitFromClientX, currentUnit])
+  }, [unitFromClientX])
 
   const handleTrackMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const track = trackRef.current
     if (!track) return
     const { left, right } = track.getBoundingClientRect()
-    // Outside the track bounds means the cursor is over a button — show current chapter.
+    // Outside the track bounds — cursor is over a button. Don't store currentUnit in state;
+    // activeUnit will fall through to the live currentUnit prop instead, avoiding stale reads.
     if (e.clientX < left || e.clientX > right) {
-      setHoverUnit(currentUnit)
+      setHoverUnit(null)
+      setOverButton(true)
     } else {
       setHoverUnit(unitFromClientX(e.clientX))
+      setOverButton(false)
     }
-  }, [unitFromClientX, currentUnit])
+  }, [unitFromClientX])
 
   const handleTrackMouseLeave = useCallback(() => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
     setHoverUnit(null)
+    setOverButton(false)
     setHoverReady(false)
   }, [])
 
@@ -170,7 +180,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
     showPressPreview(next)
   }, [currentUnit, totalUnits, onChange, showPressPreview])
 
-  const trackHovered = hoverUnit !== null
+  const trackHovered = hoverUnit !== null || overButton
   const cursorSize  = dragging ? CURSOR_SIZE_DRAG : trackHovered ? CURSOR_SIZE_HOVER : CURSOR_SIZE_REST
   const cursorColor = dragging ? CURSOR_COLOR_DRAG : trackHovered ? CURSOR_COLOR_HOVER : CURSOR_COLOR_REST
 

@@ -3,10 +3,9 @@ import { memo } from 'react'
 type Props = {
   isOpen: boolean
   onClose: () => void
-  onOpenEditor: () => void
 }
 
-const MenuPanel = memo(({ isOpen, onClose, onOpenEditor }: Props) => {
+const MenuPanel = memo(({ isOpen, onClose }: Props) => {
   return (
     <aside
       className={[
@@ -37,17 +36,6 @@ const MenuPanel = memo(({ isOpen, onClose, onOpenEditor }: Props) => {
           >
             Import LTG file
             <span className="block text-[10px] text-white/25 mt-0.5">Coming soon</span>
-          </button>
-        </section>
-
-        {/* Code Editor */}
-        <section className="px-4 py-4 border-b border-border">
-          <p className="text-[10px] uppercase tracking-wider text-white/30 mb-3">Code Editor</p>
-          <button
-            onClick={onOpenEditor}
-            className="w-full text-left px-3 py-2.5 rounded bg-white/5 text-white/70 hover:text-white hover:bg-white/10 active:bg-white/15 text-sm transition-colors"
-          >
-            Open code editor
           </button>
         </section>
 

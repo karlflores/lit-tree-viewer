@@ -14,6 +14,7 @@ func NewRouter(store Store) *gin.Engine {
 		v1.GET("/series", listSeries(store))
 		v1.GET("/series/:id", getSeries(store))
 		v1.GET("/series/:id/graph", getGraphSnapshot(store))
+		v1.GET("/series/:id/compiled", getCompiledGraph(store))
 	}
 
 	return r

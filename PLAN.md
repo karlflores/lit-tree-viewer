@@ -263,11 +263,130 @@ compilable directly to the LitTree domain model.
 - [ ] **Phase E** — In-browser editor: Monaco + `monaco-languageclient` over WebSocket to the language server; diagnostics are pushed by the server via standard LSP `publishDiagnostics`
 - [ ] **Phase F** — Tooling: VSCode extension (stdio LSP), CLI (`ltg check`, `ltg fmt`)
 
-### Phase 5 — Editor + Multi-Series (later)
-- [ ] Create / edit series via UI forms
-- [ ] Add / edit / delete characters and relationships
-- [ ] Series browser page
-- [ ] Character enrichment (Wikipedia / Fandom / AI fallback)
+### Phase 5 — Graph Layout (Ranked Force Layout)
+
+> Full specification: [`docs/layout-algorithm.md`](docs/layout-algorithm.md)
+>
+> Replaces the Dagre-based layout with a four-phase ranked force algorithm:
+> topological rank assignment → degree-weighted column placement →
+> force-directed refinement → incremental new-node placement.
+> An auto-layout button lets users re-run the full layout at any time.
+
+#### 5.1 — Phase 1: Rank Assignment
+- [ ] Extract directed subgraph from edge list
+- [ ] Compute in-degree map for the directed subgraph
+- [ ] Identify roots (in-degree = 0); fall back to highest-total-degree node if all in cycles
+- [ ] BFS longest-path layering: `rank[s] = max(rank[s], rank[n] + 1)`
+- [ ] Cycle detection and back-edge removal (directed cycles only)
+- [ ] Rank assignment for undirected-only / isolated nodes (average of neighbour ranks, fallback to 0)
+- [ ] Unit tests: roots correct, ranks respect longest path, cycle handled, isolated node gets rank 0
+
+#### 5.2 — Phase 2: Initial Position Assignment
+- [ ] Group nodes by rank
+- [ ] Sort each rank row by total degree (descending) — high-degree nodes centred
+- [ ] Compute `COLUMN_SPACING = max(MIN_NODE_DIST, avg_degree_in_row * 20)`
+- [ ] Assign x by centred column index: `x[i] = (i - (count-1)/2) * COLUMN_SPACING`
+- [ ] Assign y by rank: `y = rank * RANK_HEIGHT`
+- [ ] Barycentric crossing reduction (2 sweeps per rank row)
+- [ ] Unit tests: high-degree node is at lowest |x|; row width scales with degree
+
+#### 5.3 — Phase 3: Force-Directed Refinement
+- [ ] Implement repulsion force (all pairs, Coulomb `1/r²`; hard push when `< MIN_NODE_DIST/2`)
+- [ ] Implement attraction force (edges only, Hooke; directed edges weight ×1.5)
+- [ ] Implement rank-anchoring force (y-axis pull toward `rank * RANK_HEIGHT`)
+- [ ] Implement centre-gravity force (prevent cluster drift)
+- [ ] Euler integration loop with velocity damping and early-exit convergence
+- [ ] Expose all constants (`MIN_NODE_DIST`, `TARGET_EDGE_LENGTH`, etc.) as a single config object
+- [ ] Unit tests: no pair closer than `MIN_NODE_DIST` after refinement; converges within `MAX_ITERATIONS`
+
+#### 5.4 — Phase 4: Incremental New Node Placement
+- [ ] Detect new nodes (present in current graph but not in `savedPositions`)
+- [ ] Compute seed from average neighbour positions
+- [ ] 8-direction open-space scan to pick placement direction
+- [ ] Nudge loop to clear `MIN_NODE_DIST` overlap
+- [ ] Fallback: 4×4 grid density scan for nodes with no neighbours
+- [ ] 20-iteration force refinement with existing nodes frozen as anchors
+- [ ] Unit tests: new node ≥ `MIN_NODE_DIST` from all existing; with neighbours within 2× `TARGET_EDGE_LENGTH`
+
+#### 5.5 — Wire Up in GraphCanvas
+- [ ] Replace `applyDagreLayout` call with new `applyLayout` in the structure-change effect
+- [ ] Pass `savedPositions` into `applyLayout` so Phase 4 can distinguish new vs existing nodes
+- [ ] Thread `handleAutoLayout` callback: clear `savedPositionsRef`, re-run Phase 1–3, write to `layoutNodes`
+- [ ] Remove `@dagrejs/dagre` dependency once new layout is validated
+
+#### 5.6 — Auto-Layout Button
+- [ ] Add Auto Layout button to `ZoomControls` (icon: grid/auto-fit; tooltip: "Auto layout")
+- [ ] Button calls `onAutoLayout` prop passed down from `GraphCanvas`
+- [ ] Button is disabled while graph is empty (0 nodes)
+- [ ] Animate all nodes to new positions via existing `useAnimatedLayout` hook (no extra work needed)
+
+#### 5.7 — Edge Rendering Improvements
+- [ ] Switch all edges to straight lines (`StraightEdge` or custom SVG path) — remove bezier curves
+- [ ] Detect parallel edges (same source/target pair, regardless of direction)
+- [ ] Apply perpendicular offset (12 px per parallel edge, symmetric) so parallel edges are individually readable
+- [ ] Update `RelationshipEdge.tsx` to accept and render offset
+
+#### 5.8 — Tests and Cleanup
+- [ ] Extend `layout.test.ts` with full Phase 1–4 coverage (see spec for table of required tests)
+- [ ] Remove Dagre from `package.json` and `layout.ts`
+- [ ] Smoke-test against The Count of Monte Cristo seed data (main series used for dev)
+- [ ] Verify auto-layout animation plays correctly at all graph sizes (1 node, 5 nodes, 30+ nodes)
+
+### Phase 6 — Canvas Edit Mode (was Phase 5)
+
+> **Concept:** A visual way to author LTG declarations. The canvas becomes an interactive
+> editor where adding a node, drawing a relationship, or marking a character deceased
+> produces the equivalent LTG statement in the underlying document. The two representations
+> (visual graph ↔ LTG source) stay in sync bidirectionally.
+>
+> The timeline scrubber remains active in edit mode — the selected unit determines which
+> block all mutations are applied to.
+
+#### 5.1 — Edit Mode Toolbar
+- [ ] When `editMode` is active, swap the standard `SideToolbar` children for the edit toolbar buttons (no structural changes to `SideToolbar` needed — it is already a generic container)
+- [ ] **Save button** — persists the current graph state / compiled LTG back to the backend
+- [ ] **Exit button** — leaves edit mode and restores the standard view toolbar
+- [ ] **New Block button** — appends an empty block at the end of the timeline at the current unit type
+- [ ] **New Chapter button** — appends a new chapter-type block (specific to series using `set block: chapter`) and advances the timeline to it
+- [ ] **Edit Timeline button** — opens a timeline grouping tool for organising blocks into volumes/arcs (see §5.4 below)
+- [ ] **New Node button** — creates a new character node; places it at the viewport centre and immediately opens an inline name-entry prompt
+
+#### 5.2 — Canvas Interactions in Edit Mode
+- [ ] **Right-click context menu on a node** — a small floating menu anchored to the node with actions:
+  - Toggle deceased (adds/removes a `deceased <id>` event at the current unit)
+  - Edit display name (inline edit of the character's current display name)
+  - Rename at unit (adds a `rename <id>: "<new name>"` event at the current unit, preserving name history)
+  - Delete node (removes the character — with a confirmation step; cascades to its relationships)
+- [ ] **Drag to connect nodes** — dragging from a node handle to another node opens a "New Relationship" prompt (label, directed/undirected); emits a `link <label>(<a> -- <b>)` or `link <label>(<a> -> <b>)` event
+- [ ] **Click a relationship edge in edit mode** — select it; shows an edge toolbar with: edit label, toggle direction, delete (emits `unlink`)
+
+#### 5.3 — Timeline Integration
+- [ ] The scrubber unit determines which block is being authored; the block index and label are shown prominently while in edit mode
+- [ ] Mutations (new actor, link, unlink, deceased, rename) are always emitted into the block at `currentUnit`
+- [ ] Navigating to a different unit in edit mode switches the editing context — a brief confirmation prompt if there are unsaved changes on the current block
+
+#### 5.4 — Edit Timeline Tool (design TBD)
+- [ ] Visual interface for grouping blocks into `group "..."` containers (volumes, arcs, seasons)
+- [ ] Drag-to-reorder blocks within a group
+- [ ] Create / rename / delete groups
+- [ ] Exact interaction model to be fleshed out before implementation begins
+
+#### 5.5 — Bidirectional LTG Sync
+- [ ] Canvas mutations produce LTG AST diffs, not raw text edits — round-trip through the language server
+- [ ] If the code editor is open alongside the canvas, it reflects changes in real time
+- [ ] If the user edits LTG source and compiles, the canvas updates to match
+- [ ] Conflict resolution strategy TBD (likely: last-write-wins per block, with the canonical source being the LTG document)
+
+#### 5.6 — Multi-Series Support
+- [ ] Series browser / landing page
+- [ ] Create new series wizard (title, media type, unit label)
+- [ ] Series switcher in the header
+
+### Phase 7 — Character Enrichment (was Phase 6)
+- [ ] Enrichment service in Go (Wikipedia API → Fandom API → Claude API fallback)
+- [ ] Cache enriched data back to DB
+- [ ] Surface source label in character panel ("From Wikipedia", "AI generated")
+- [ ] User override: manual edit of description + image upload
 
 ---
 

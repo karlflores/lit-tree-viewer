@@ -29,3 +29,7 @@ func (s *PGStore) GetSeriesByID(ctx context.Context, id uuid.UUID) (domain.Serie
 func (s *PGStore) GetGraphSnapshot(ctx context.Context, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error) {
 	return GetGraphSnapshot(ctx, s.pool, seriesID, atUnit)
 }
+
+func (s *PGStore) GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error) {
+	return GetCompiledGraph(ctx, s.pool, seriesID)
+}

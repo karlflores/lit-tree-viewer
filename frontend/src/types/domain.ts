@@ -88,6 +88,7 @@ export type GraphSnapshot = Readonly<{
   characters: readonly Character[]
   relationships: readonly Relationship[]
   atUnit: number
+  colours?: Readonly<Record<string, string>>
 }>
 
 // ============================================================

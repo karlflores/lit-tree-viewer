@@ -1,5 +1,10 @@
 import { memo, useEffect, useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
+
+// All four sides declared as both source and target so React Flow's connection
+// system works from any direction. The edge component ignores these positions
+// and computes its own attachment points via useInternalNode.
+const HANDLES = [Position.Top, Position.Right, Position.Bottom, Position.Left]
 import { getCharacterState, getInitials, type Character } from '../types/domain'
 
 export type CharacterNodeData = {
@@ -30,8 +35,10 @@ const CharacterNode = memo(({ data }: NodeProps) => {
         isSelected ? 'ring-2 ring-white border-white'  : 'hover:border-white/40',
       ].join(' ')}
     >
-      <Handle type="target" position={Position.Top}    className="opacity-0" />
-      <Handle type="source" position={Position.Bottom} className="opacity-0" />
+      {HANDLES.flatMap(pos => [
+        <Handle key={`s-${pos}`} type="source" position={pos} id={`s-${pos}`} className="opacity-0 !w-0 !h-0 !min-w-0 !min-h-0" />,
+        <Handle key={`t-${pos}`} type="target" position={pos} id={`t-${pos}`} className="opacity-0 !w-0 !h-0 !min-w-0 !min-h-0" />,
+      ])}
 
       <div className={[
         'w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold',

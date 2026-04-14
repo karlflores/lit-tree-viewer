@@ -115,3 +115,45 @@ type GraphSnapshot struct {
 	Relationships []Relationship `json:"relationships"`
 	AtUnit        int            `json:"atUnit"`
 }
+
+// CompiledCharacter is the full history shape used by the LTG emitter.
+// Identifier is the LTG source identifier (ltg_identifier column); falls back
+// to the UUID string for legacy records without one.
+type CompiledCharacter struct {
+	Identifier   string            `json:"identifier"`
+	Name         string            `json:"name"`
+	Aliases      []string          `json:"aliases"`
+	Renames      []CharacterRename `json:"renames"`
+	IntroducedAt int               `json:"introducedAt"`
+	DiedAt       *int              `json:"diedAt"`
+}
+
+// CompiledRelationship is the full history shape used by the LTG emitter.
+// Identifiers reference the LTG source identifiers of the endpoint characters.
+type CompiledRelationship struct {
+	FromIdentifier string `json:"fromIdentifier"`
+	ToIdentifier   string `json:"toIdentifier"`
+	Label          string `json:"label"`
+	Directed       bool   `json:"directed"`
+	IntroducedAt   int    `json:"introducedAt"`
+	EndedAt        *int   `json:"endedAt"`
+}
+
+// CompiledBlock is the timeline unit shape used by the LTG emitter.
+type CompiledBlock struct {
+	Index      int     `json:"index"`
+	Label      *string `json:"label"`
+	GroupLabel *string `json:"groupLabel"`
+}
+
+// CompiledGraph is the full graph history for a series, matching the
+// CompileSuccess shape expected by the frontend ltgEmitter.
+// Only explicit set colour: overrides are included in Colours so that the
+// emitter can round-trip them without emitting hash-derived defaults.
+type CompiledGraph struct {
+	Series        Series                 `json:"series"`
+	Characters    []CompiledCharacter    `json:"characters"`
+	Relationships []CompiledRelationship `json:"relationships"`
+	Colours       map[string]string      `json:"colours"`
+	Blocks        []CompiledBlock        `json:"blocks"`
+}

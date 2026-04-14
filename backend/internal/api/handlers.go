@@ -46,6 +46,30 @@ func getSeries(store Store) gin.HandlerFunc {
 	}
 }
 
+// getCompiledGraph handles GET /series/:id/compiled
+// Returns the full graph history in CompileSuccess shape for LTG source emission.
+func getCompiledGraph(store Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := uuid.Parse(c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid series id"})
+			return
+		}
+
+		graph, err := store.GetCompiledGraph(c.Request.Context(), id)
+		if errors.Is(err, db.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "series not found"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build compiled graph"})
+			return
+		}
+
+		c.JSON(http.StatusOK, graph)
+	}
+}
+
 // getGraphSnapshot handles GET /series/:id/graph?at=N
 func getGraphSnapshot(store Store) gin.HandlerFunc {
 	return func(c *gin.Context) {

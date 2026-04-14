@@ -1,0 +1,140 @@
+# Wuthering Heights by Emily Brontë
+# A graph of the major characters and relationships, told in the order
+# events unfold rather than the novel's frame-narrative chapter order.
+
+metadata title:  "Wuthering Heights"
+metadata media:  book
+metadata author: "Emily Brontë"
+
+set block: chapter
+set group: volume
+
+set colour: parent_child = "#818cf8"
+set colour: siblings     = "#60a5fa"
+set colour: guardian     = "#a78bfa"
+set colour: friends      = "#4ade80"
+set colour: romantic     = "#e879f9"
+set colour: married      = "#f472b6"
+set colour: rival        = "#fb923c"
+set colour: enemy        = "#f87171"
+set colour: tenant       = "#94a3b8"
+
+# ── Block 1: The Earnshaw household at Wuthering Heights ─────────────────────
+init:
+    actor earnshaw:  "Mr. Earnshaw"
+    actor hindley:   "Hindley Earnshaw"
+    actor catherine: "Catherine Earnshaw"
+    actor nelly:     "Nelly Dean"
+    actor joseph:    "Joseph"
+    link parent_child(earnshaw -> hindley)
+    link parent_child(earnshaw -> catherine)
+    link siblings(hindley -- catherine)
+
+group "Volume I":
+    # Block 2
+    new chapter: "Heathcliff Arrives"
+        actor heathcliff: "Heathcliff"
+        link guardian(earnshaw -> heathcliff)
+        link friends(catherine -- heathcliff)
+        link rival(hindley -> heathcliff)
+
+    # Block 3
+    new chapter: "Hindley Goes to College"
+
+    # Block 4
+    new chapter: "Hindley Returns as Master"
+        actor frances: "Frances Earnshaw"
+        deceased earnshaw
+        link married(hindley -- frances)
+        link enemy(hindley -> heathcliff)
+
+    # Block 5
+    new chapter: "Cathy and Heathcliff at Thrushcross Grange"
+        actor edgar:    "Edgar Linton"
+        actor isabella: "Isabella Linton"
+        link siblings(edgar -- isabella)
+        link romantic(catherine -- edgar)
+
+    # Block 6
+    new chapter: "Frances Dies, Hareton Born"
+        actor hareton: "Hareton Earnshaw"
+        deceased frances
+        link parent_child(hindley -> hareton)
+
+    # Block 7
+    new chapter: "Heathcliff Overhears and Departs"
+
+    # Block 8
+    new chapter: "Catherine and Edgar Wed"
+        rename catherine: "Catherine Linton"
+        link married(edgar -- catherine)
+        unlink romantic catherine edgar
+
+    # Block 9
+    new chapter: "Heathcliff Returns, Wealthy and Changed"
+        link romantic(heathcliff -> catherine)
+        link enemy(heathcliff -> edgar)
+
+    # Block 10
+    new chapter: "Isabella Falls for Heathcliff"
+        link romantic(isabella -> heathcliff)
+
+    # Block 11
+    new chapter: "Heathcliff Elopes with Isabella"
+        link married(heathcliff -- isabella)
+        unlink romantic isabella heathcliff
+
+    # Block 12
+    new chapter: "Catherine Dies in Childbirth"
+        actor cathy: "Cathy Linton"
+        deceased catherine
+        link parent_child(edgar -> cathy)
+
+group "Volume II":
+    # Block 13
+    new chapter: "Hindley Dies, Heathcliff Takes Wuthering Heights"
+        actor linton: "Linton Heathcliff"
+        deceased hindley
+        link parent_child(heathcliff -> linton)
+        link guardian(heathcliff -> hareton)
+
+    # Block 14
+    new chapter: "Isabella Dies in Exile"
+        deceased isabella
+
+    # Block 15
+    new chapter: "Cathy Meets Her Cousins"
+        link friends(cathy -- hareton)
+        link friends(cathy -- linton)
+
+    # Block 16
+    new chapter: "Cathy and Linton Correspond"
+        link romantic(cathy -- linton)
+
+    # Block 17
+    new chapter: "Edgar Is Failing"
+
+    # Block 18
+    new chapter: "Heathcliff Forces the Marriage"
+        rename cathy: "Catherine Heathcliff"
+        link married(cathy -- linton)
+        unlink romantic cathy linton
+
+    # Block 19
+    new chapter: "Edgar and Linton Die"
+        deceased edgar
+        deceased linton
+        link guardian(heathcliff -> cathy)
+
+    # Block 20
+    new chapter: "Lockwood's Visit"
+        actor lockwood: "Mr. Lockwood"
+        link tenant(lockwood -> heathcliff)
+
+    # Block 21
+    new chapter: "Hareton and Cathy Grow Close"
+        link romantic(hareton -- cathy)
+
+    # Block 22
+    new chapter: "Heathcliff Dies"
+        deceased heathcliff

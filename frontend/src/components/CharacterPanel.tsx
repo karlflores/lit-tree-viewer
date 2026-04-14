@@ -10,9 +10,10 @@ type Props = {
   atUnit: number
   isOpen: boolean
   onClose: () => void
+  colours?: Readonly<Record<string, string>>
 }
 
-const CharacterPanel = memo(({ character, relationships, allCharacters, series, atUnit, isOpen, onClose }: Props) => {
+const CharacterPanel = memo(({ character, relationships, allCharacters, series, atUnit, isOpen, onClose, colours }: Props) => {
   const state = getCharacterState(character, atUnit)
   const deceased = state.status === 'deceased'
   const charById = new Map(allCharacters.map(c => [c.id, c]))
@@ -76,7 +77,7 @@ const CharacterPanel = memo(({ character, relationships, allCharacters, series, 
             {relevant.map(r => {
               const otherId = r.fromId === character.id ? r.toId : r.fromId
               const other = charById.get(otherId)
-              const style = getEdgeStyle(r.kind, r.label)
+              const style = getEdgeStyle(r.kind, r.label, colours)
               const arrow = r.directed
                 ? r.fromId === character.id ? '→' : '←'
                 : '↔'
