@@ -111,6 +111,49 @@ const structureKey = (nodes: readonly Node[], edges: readonly Edge[]): string =>
   ].join('|')
 
 // ---------------------------------------------------------------------------
+// AddNodeHandler — places a new node at viewport centre when `trigger` increments.
+// Must live inside ReactFlow's provider tree to use useReactFlow().
+// ---------------------------------------------------------------------------
+
+type AddNodeHandlerProps = {
+  trigger: number
+  seriesId: string
+  atUnit: number
+  savedPositionsRef: MutableRefObject<Map<string, { x: number; y: number }>>
+  onAddCharacter: (character: Character) => void
+}
+
+const AddNodeHandler = ({ trigger, seriesId, atUnit, savedPositionsRef, onAddCharacter }: AddNodeHandlerProps) => {
+  const { screenToFlowPosition } = useReactFlow()
+  const prevTriggerRef = useRef(trigger)
+
+  useEffect(() => {
+    if (trigger === prevTriggerRef.current) return
+    prevTriggerRef.current = trigger
+
+    const pos = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const id = crypto.randomUUID()
+
+    // Pre-seed position so layout won't override it with Phase 4 incremental placement.
+    savedPositionsRef.current.set(id, pos)
+    savePosition(seriesId, id, pos)
+
+    onAddCharacter({
+      id,
+      seriesId,
+      name: '',
+      aliases: [],
+      description: null,
+      imageUrl: null,
+      introducedAt: atUnit,
+      diedAt: null,
+    })
+  }, [trigger, seriesId, atUnit, savedPositionsRef, screenToFlowPosition, onAddCharacter])
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // GraphCanvas
 // ---------------------------------------------------------------------------
 
@@ -122,9 +165,11 @@ type Props = {
   onSelectCharacter: (character: Character | null) => void
   menuOpen: boolean
   onCloseMenu: () => void
+  addNodeTrigger?: number
+  onAddCharacter?: (character: Character) => void
 }
 
-const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu }: Props) => {
+const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, addNodeTrigger, onAddCharacter }: Props) => {
   const { characters, relationships, atUnit } = snapshot
   const colours = snapshot.colours
 
@@ -295,6 +340,15 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
       proOptions={{ hideAttribution: true }}
     >
       <FitViewTrigger fitViewRef={fitViewRef} nodeCount={animatedNodes.length} />
+      {addNodeTrigger !== undefined && onAddCharacter && (
+        <AddNodeHandler
+          trigger={addNodeTrigger}
+          seriesId={snapshot.series.id}
+          atUnit={atUnit}
+          savedPositionsRef={savedPositionsRef}
+          onAddCharacter={onAddCharacter}
+        />
+      )}
       <Background color="#2a2d3a" gap={24} size={1} />
       <ZoomControls onAutoLayout={handleAutoLayout} />
     </ReactFlow>

@@ -15,6 +15,7 @@ import CharacterPanel from './components/CharacterPanel'
 import MenuPanel from './components/MenuPanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import SideToolbar from './components/SideToolbar'
+import CharacterEditPanel from './components/CharacterEditPanel'
 import ToolbarButton from './components/ToolbarButton'
 import NotificationStack from './components/NotificationStack'
 import Toggle from './components/Toggle'
@@ -248,6 +249,25 @@ export default function App() {
     setEditMode(false)
   }, [])
 
+  const [addNodeTrigger, setAddNodeTrigger] = useState(0)
+
+  const handleAddCharacter = useCallback((character: Character) => {
+    if (!editGraph) return
+    const updated = { ...editGraph, characters: [...editGraph.characters, character] }
+    setEditGraph(updated)
+    saveEditGraph(updated)
+  }, [editGraph])
+
+  const handleUpdateCharacter = useCallback((character: Character) => {
+    if (!editGraph) return
+    const characters = editGraph.characters.map(c => c.id === character.id ? character : c)
+    const next = { ...editGraph, characters }
+    setEditGraph(next)
+    saveEditGraph(next)
+    // Keep the panel in sync with the updated data.
+    setPanelCharacter(character)
+  }, [editGraph])
+
   // Toggle edit mode: entering uses the full graph (all characters + all
   // relationships, no temporal filtering) as the edit base so no ended
   // relationships are silently dropped. Exiting clears editable state and
@@ -363,20 +383,32 @@ export default function App() {
             onSelectCharacter={handleSelectCharacter}
             menuOpen={menuOpen}
             onCloseMenu={handleCloseMenu}
+            addNodeTrigger={editMode ? addNodeTrigger : undefined}
+            onAddCharacter={editMode ? handleAddCharacter : undefined}
           />
         </div>
 
         {panelCharacter && (
-          <CharacterPanel
-            character={panelCharacter}
-            relationships={snapshot.relationships}
-            allCharacters={snapshot.characters}
-            series={series}
-            atUnit={currentUnit}
-            isOpen={panelOpen}
-            onClose={() => handleSelectCharacter(null)}
-            colours={snapshot.colours}
-          />
+          editMode ? (
+            <CharacterEditPanel
+              character={panelCharacter}
+              series={series}
+              isOpen={panelOpen}
+              onClose={() => handleSelectCharacter(null)}
+              onUpdate={handleUpdateCharacter}
+            />
+          ) : (
+            <CharacterPanel
+              character={panelCharacter}
+              relationships={snapshot.relationships}
+              allCharacters={snapshot.characters}
+              series={series}
+              atUnit={currentUnit}
+              isOpen={panelOpen}
+              onClose={() => handleSelectCharacter(null)}
+              colours={snapshot.colours}
+            />
+          )
         )}
 
         {menuMounted && (
@@ -387,44 +419,93 @@ export default function App() {
         )}
 
         <SideToolbar hidden={menuOpen || editorOpen}>
-          <div className="pointer-events-auto">
-            <ToolbarButton
-              icon={<MenuIcon />}
-              label="Open Menu"
-              onClick={handleToggleMenu}
-              active={menuOpen}
-            />
-          </div>
-          <div className="pointer-events-auto">
-            <ToolbarButton
-              icon={<EditIcon />}
-              label="Edit Mode"
-              onClick={handleToggleEditMode}
-              active={editMode}
-            />
-          </div>
-          <div className="pointer-events-auto">
-            <ToolbarButton
-              icon={<NewGraphIcon />}
-              label="New Graph"
-              onClick={handleNewGraph}
-            />
-          </div>
-          <div className="pointer-events-auto">
-            <ToolbarButton
-              icon={<OpenInEditorIcon />}
-              label="Open in Editor"
-              onClick={handleOpenInEditor}
-            />
-          </div>
-          <div className="pointer-events-auto">
-            <ToolbarButton
-              icon={<CodeEditorIcon />}
-              label="Code Editor"
-              onClick={handleToggleEditor}
-              active={editorOpen}
-            />
-          </div>
+          {editMode ? (
+            <>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<SaveIcon />}
+                  label="Save"
+                  onClick={handleSaveGraph}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<ExitEditIcon />}
+                  label="Exit Edit Mode"
+                  onClick={handleExitEdit}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<NewNodeIcon />}
+                  label="New Node"
+                  onClick={() => setAddNodeTrigger(t => t + 1)}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<NewBlockIcon />}
+                  label="New Block"
+                  onClick={() => addToast({ kind: 'info', title: 'New Block — coming soon' })}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<NewChapterIcon />}
+                  label="New Chapter"
+                  onClick={() => addToast({ kind: 'info', title: 'New Chapter — coming soon' })}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<EditTimelineIcon />}
+                  label="Edit Timeline"
+                  onClick={() => addToast({ kind: 'info', title: 'Edit Timeline — coming soon' })}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<MenuIcon />}
+                  label="Open Menu"
+                  onClick={handleToggleMenu}
+                  active={menuOpen}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<EditIcon />}
+                  label="Edit Mode"
+                  onClick={handleToggleEditMode}
+                  active={editMode}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<NewGraphIcon />}
+                  label="New Graph"
+                  onClick={handleNewGraph}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<OpenInEditorIcon />}
+                  label="Open in Editor"
+                  onClick={handleOpenInEditor}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<CodeEditorIcon />}
+                  label="Code Editor"
+                  onClick={handleToggleEditor}
+                  active={editorOpen}
+                />
+              </div>
+            </>
+          )}
         </SideToolbar>
 
         {editorMounted && (
@@ -496,6 +577,65 @@ function CodeEditorIcon() {
       <path d="M4.5 3.5L1 7.5l3.5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M10.5 3.5L14 7.5l-3.5 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M9.5 2l-4 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function SaveIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <rect x="2" y="2" width="11" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="4.5" y="2" width="6" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="3.5" y="8" width="8" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  )
+}
+
+function ExitEditIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <path d="M2.5 7.5h8M7 4l3.5 3.5L7 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6 2.5H3a1 1 0 00-1 1v8a1 1 0 001 1h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function NewNodeIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <circle cx="7.5" cy="7.5" r="3.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M7.5 2V1M7.5 14v-1M2 7.5H1M14 7.5h-1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M11 4.5h2.5M12.25 3.25v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function NewBlockIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <rect x="1.5" y="4.5" width="8" height="6" rx="1" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M11 7h2.5M12.25 5.75v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function NewChapterIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <path d="M3 2.5h6.5a1 1 0 011 1V11a1 1 0 01-1 1H3a1 1 0 01-1-1V3.5a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5 6h4M5 8h3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M11 3h2.5M12.25 1.75v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function EditTimelineIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <path d="M1.5 4.5h12M1.5 7.5h12M1.5 10.5h12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <rect x="3" y="3.5" width="3" height="2" rx="0.5" fill="currentColor" />
+      <rect x="7" y="6.5" width="4" height="2" rx="0.5" fill="currentColor" />
+      <rect x="5" y="9.5" width="2" height="2" rx="0.5" fill="currentColor" />
     </svg>
   )
 }
