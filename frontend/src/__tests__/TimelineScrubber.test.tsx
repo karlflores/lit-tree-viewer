@@ -67,4 +67,26 @@ describe('TimelineScrubber', () => {
     render(<TimelineScrubber series={series} currentUnit={7} onChange={() => {}} />)
     expect(screen.getByText('7')).toBeInTheDocument()
   })
+
+  it('handles totalUnits: 1 — both nav buttons disabled, no crash on pointer events', () => {
+    const singleSeries: Series = { ...series, totalUnits: 1 }
+    const onChange = vi.fn()
+    const { container } = render(
+      <TimelineScrubber series={singleSeries} currentUnit={1} onChange={onChange} />,
+    )
+
+    const buttons = screen.getAllByRole('button')
+    expect(buttons[0]).toBeDisabled()
+    expect(buttons[1]).toBeDisabled()
+
+    // Pointer events on the track should be ignored (singleUnit guard)
+    const track = container.querySelector('.cursor-pointer') as HTMLElement
+    expect(() => {
+      track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 100 }))
+      track.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true }))
+    }).not.toThrow()
+
+    // onChange should never be called — there's nothing to scrub to
+    expect(onChange).not.toHaveBeenCalled()
+  })
 })

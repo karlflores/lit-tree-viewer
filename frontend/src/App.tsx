@@ -258,6 +258,31 @@ export default function App() {
     saveEditGraph(updated)
   }, [editGraph])
 
+  const handleCommitName = useCallback((id: string, name: string) => {
+    if (!editGraph) return
+    const trimmed = name.trim()
+    if (!trimmed) {
+      // Empty name — treat as cancel
+      const characters = editGraph.characters.filter(c => c.id !== id)
+      const next = { ...editGraph, characters }
+      setEditGraph(next)
+      saveEditGraph(next)
+      return
+    }
+    const characters = editGraph.characters.map(c => c.id === id ? { ...c, name: trimmed } : c)
+    const next = { ...editGraph, characters }
+    setEditGraph(next)
+    saveEditGraph(next)
+  }, [editGraph])
+
+  const handleCancelNode = useCallback((id: string) => {
+    if (!editGraph) return
+    const characters = editGraph.characters.filter(c => c.id !== id)
+    const next = { ...editGraph, characters }
+    setEditGraph(next)
+    saveEditGraph(next)
+  }, [editGraph])
+
   const handleUpdateCharacter = useCallback((character: Character) => {
     if (!editGraph) return
     const characters = editGraph.characters.map(c => c.id === character.id ? character : c)
@@ -383,8 +408,11 @@ export default function App() {
             onSelectCharacter={handleSelectCharacter}
             menuOpen={menuOpen}
             onCloseMenu={handleCloseMenu}
+            editMode={editMode}
             addNodeTrigger={editMode ? addNodeTrigger : undefined}
             onAddCharacter={editMode ? handleAddCharacter : undefined}
+            onCommitName={editMode ? handleCommitName : undefined}
+            onCancelNode={editMode ? handleCancelNode : undefined}
           />
         </div>
 

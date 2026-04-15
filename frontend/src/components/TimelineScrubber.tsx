@@ -45,7 +45,9 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
 
   const dragging        = rawProgress !== null
   const totalUnits      = series.totalUnits
-  const snappedProgress = (currentUnit - 1) / Math.max(totalUnits - 1, 1)
+  const singleUnit      = totalUnits === 1
+  const progressOf      = (unit: number) => singleUnit ? 0.5 : (unit - 1) / (totalUnits - 1)
+  const snappedProgress = progressOf(currentUnit)
   const cursorProgress  = rawProgress ?? snappedProgress
 
   const previewUnit = dragging
@@ -58,9 +60,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
 
   // The unit and progress the label should logically track right now.
   const activeUnit     = dragging ? previewUnit : (pressPreviewUnit ?? hoverUnit ?? currentUnit)
-  const activeProgress = dragging
-    ? cursorProgress
-    : (activeUnit - 1) / Math.max(totalUnits - 1, 1)
+  const activeProgress = dragging ? cursorProgress : progressOf(activeUnit)
 
   // Freeze the last rendered position so the label fades out in-place rather
   // than sliding back toward the current chapter when hover ends.
@@ -101,6 +101,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
   }, [currentUnit, totalUnits])
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (singleUnit) return
     // Cancel the hover-ready timer — drag takes over, no need to show the
     // delayed label via the hover path.
     if (hoverTimerRef.current) {
@@ -110,7 +111,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
     setHoverReady(false)
     e.currentTarget.setPointerCapture(e.pointerId)
     setRawProgress(progressFromClientX(e.clientX))
-  }, [progressFromClientX])
+  }, [singleUnit, progressFromClientX])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
@@ -125,6 +126,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
   }, [rawProgress, totalUnits, onChange])
 
   const handleTrackMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (singleUnit) return
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)
     const track = trackRef.current
     if (track) {
@@ -138,9 +140,10 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
       }
     }
     hoverTimerRef.current = setTimeout(() => setHoverReady(true), HOVER_DELAY_MS)
-  }, [unitFromClientX])
+  }, [singleUnit, unitFromClientX])
 
   const handleTrackMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (singleUnit) return
     const track = trackRef.current
     if (!track) return
     const { left, right } = track.getBoundingClientRect()
@@ -153,7 +156,7 @@ const TimelineScrubber = memo(({ series, currentUnit, onChange }: Props) => {
       setHoverUnit(unitFromClientX(e.clientX))
       setOverButton(false)
     }
-  }, [unitFromClientX])
+  }, [singleUnit, unitFromClientX])
 
   const handleTrackMouseLeave = useCallback(() => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current)

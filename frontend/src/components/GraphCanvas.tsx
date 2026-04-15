@@ -165,11 +165,14 @@ type Props = {
   onSelectCharacter: (character: Character | null) => void
   menuOpen: boolean
   onCloseMenu: () => void
+  editMode?: boolean
   addNodeTrigger?: number
   onAddCharacter?: (character: Character) => void
+  onCommitName?: (id: string, name: string) => void
+  onCancelNode?: (id: string) => void
 }
 
-const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, addNodeTrigger, onAddCharacter }: Props) => {
+const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, editMode, addNodeTrigger, onAddCharacter, onCommitName, onCancelNode }: Props) => {
   const { characters, relationships, atUnit } = snapshot
   const colours = snapshot.colours
 
@@ -216,6 +219,24 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
   }, [relationships, colours, characters, visibleIds])
 
   const seriesId = snapshot.series.id
+
+  // ── Pending node naming ───────────────────────────────────────────────────
+  const [pendingNodeId, setPendingNodeId] = useState<string | null>(null)
+
+  const handleNodeCreated = useCallback((character: Character) => {
+    setPendingNodeId(character.id)
+    onAddCharacter?.(character)
+  }, [onAddCharacter])
+
+  const handleCommitName = useCallback((id: string, name: string) => {
+    setPendingNodeId(null)
+    onCommitName?.(id, name)
+  }, [onCommitName])
+
+  const handleCancelNode = useCallback((id: string) => {
+    setPendingNodeId(null)
+    onCancelNode?.(id)
+  }, [onCancelNode])
 
   // Saved positions — loaded once from localStorage and updated on every drag end.
   const savedPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
@@ -273,8 +294,13 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
   const [allAnimatedNodes, setAnimatedNodes] = useAnimatedLayout(layoutNodes)
 
   const animatedNodes = useMemo(
-    () => allAnimatedNodes.filter(n => visibleIds.has(n.id)),
-    [allAnimatedNodes, visibleIds],
+    () => allAnimatedNodes
+      .filter(n => visibleIds.has(n.id))
+      .map(n => n.id === pendingNodeId
+        ? { ...n, data: { ...n.data, isNaming: true, onCommitName: handleCommitName, onCancelNode: handleCancelNode } }
+        : n,
+      ),
+    [allAnimatedNodes, visibleIds, pendingNodeId, handleCommitName, handleCancelNode],
   )
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
@@ -312,13 +338,15 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
   }, [layoutRawNodes, layoutEdges, seriesId])
 
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
+    // Don't select while the node is waiting for a name to be committed.
+    if (node.id === pendingNodeId) return
     if (node.id === selectedCharacterId) {
       onSelectCharacter(null)
     } else {
       const character = characters.find(c => c.id === node.id) ?? null
       onSelectCharacter(character)
     }
-  }, [characters, selectedCharacterId, onSelectCharacter])
+  }, [characters, selectedCharacterId, onSelectCharacter, pendingNodeId])
 
   const onPaneClick = useCallback(() => {
     onSelectCharacter(null)
@@ -346,11 +374,24 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
           seriesId={snapshot.series.id}
           atUnit={atUnit}
           savedPositionsRef={savedPositionsRef}
-          onAddCharacter={onAddCharacter}
+          onAddCharacter={handleNodeCreated}
         />
       )}
       <Background color="#2a2d3a" gap={24} size={1} />
       <ZoomControls onAutoLayout={handleAutoLayout} />
+      {editMode && animatedNodes.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col items-center gap-2 select-none">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" className="text-white/15">
+              <circle cx="16" cy="16" r="13" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+              <path d="M16 10v12M10 16h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <p className="text-white/30 text-sm">
+              Click <span className="text-white/50 font-medium">New Node</span> to add your first character
+            </p>
+          </div>
+        </div>
+      )}
     </ReactFlow>
   )
 })

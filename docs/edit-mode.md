@@ -220,57 +220,116 @@ pre-refactor data (old flat `EditableGraph` shape) is automatically discarded.
 - [x] On blur / Enter: commit; reset to `"Untitled"` if empty; save to sessionStorage
 - [x] On Escape: revert to pre-focus value via `titleBeforeEditRef`; save; blur
 
-### 6.5 — Edit Toolbar
-- [ ] Create `src/components/EditToolbar.tsx` with Save, New Node, Exit buttons
-- [ ] Pass `onSave`, `onNewNode`, `onExit` props
-- [ ] In `App.tsx`, swap `SideToolbar` children: `editMode ? <EditToolbar /> : <ViewerToolbar />`
+### 6.5 — Edit Toolbar ✅
+- [x] Swap `SideToolbar` children in `App.tsx` based on `editMode` (no separate component needed — inline JSX)
+- [x] Edit toolbar: Save (wired to `handleSaveGraph`), Exit (wired to `handleExitEdit`), New Node (wired), New Block / New Chapter / Edit Timeline (stubs — show info toast; wired in 6.12)
 
-### 6.6 — New Node on Canvas
-- [ ] Add `onAddCharacter?: (character: Character) => void` prop to `GraphCanvas`
-- [ ] In `GraphCanvas`, `handleAddNode`: reads viewport centre via `useReactFlow().screenToFlowPosition`, creates a `Character` stub with a generated `crypto.randomUUID()` ID and `introducedAt = currentUnit`, calls `onAddCharacter`
-- [ ] In `App.tsx`, `handleAddCharacter(char)`: append to `editGraph.characters`, re-derive snapshot, save session
+### 6.6 — New Node on Canvas ✅
+- [x] `addNodeTrigger: number` + `onAddCharacter` props on `GraphCanvas`
+- [x] `AddNodeHandler` inner component (inside ReactFlow provider): detects trigger increment, calls `screenToFlowPosition` at window centre, pre-seeds position in `savedPositionsRef`, creates stub `Character`, calls `onAddCharacter`
+- [x] `handleAddCharacter` in `App.tsx`: append to `editGraph.characters`, save session
 
-### 6.7 — Inline Name Prompt for New Nodes
-- [ ] Add `pendingNodeId: string | null` state to `GraphCanvas`
-- [ ] `CharacterNode` accepts `isNaming?: boolean` data field — renders `<input>` over label
-- [ ] On Enter or blur: call `onCommitName(id, name)` prop; clear `pendingNodeId`
-- [ ] On Escape: call `onCancelNode(id)` — removes the node from `editGraph`
+### 6.7 — Inline Name Prompt for New Nodes ✅
+- [x] `pendingNodeId: string | null` state in `GraphCanvas`; set by `handleNodeCreated` wrapper around `onAddCharacter`
+- [x] `isNaming`, `onCommitName`, `onCancelNode` fields on `CharacterNodeData`; injected at the `animatedNodes` memo layer for the pending node only
+- [x] `CharacterNode` renders `<input autoFocus>` when `isNaming`; `nodrag nopan` classes prevent canvas interaction while typing
+- [x] Enter / blur: `onCommitName(id, name)`; empty name treated as cancel
+- [x] Escape: `escapedRef` prevents double-fire; `onCancelNode(id)` removes node from `editGraph`
 
-### 6.8 — Empty Canvas State
-- [ ] When `editMode && nodes.length === 0`, render centred hint: `"Click New Node to add your first character"`
+### 6.8 — Empty Canvas Hint ✅
+- [x] `editMode` prop on `GraphCanvas`; when `editMode && animatedNodes.length === 0` renders a centred dashed-circle + plus icon overlay with the hint text
+- [x] `pointer-events-none` — never blocks interaction
 
-### 6.9 — Timeline (New Graph)
-- [ ] `TimelineScrubber` receives `series` from `editGraph.series` when in edit mode
-- [ ] Renders correctly for `totalUnits: 1` (single point, no range)
+### 6.9 — Timeline for New Graph ✅
+- [x] `progressOf` helper: `singleUnit ? 0.5 : (unit-1)/(totalUnits-1)` — cursor and label centred for `totalUnits: 1`
+- [x] Pointer and hover handlers short-circuit when `singleUnit` — track is fully inert
+- [x] Unit test: `totalUnits: 1` → both buttons disabled, `onChange` never called on pointer events
 
 ---
 
-## Future Phases (out of scope for 6.x initial)
+### 6.10 — Relationship Authoring
 
-### 6.x — Add / Edit Relationships
-- Drag between node handles to draw a new relationship
-- Clicking an edge in edit mode opens an edge properties popover (label, directed toggle, kind)
-- Delete edge via context menu or Delete key
+#### 6.10.1 — Edit mode connection handles
+- [ ] Add `editMode?: boolean` to `CharacterNodeData`; inject in `GraphCanvas` when edit mode is active
+- [ ] In `CharacterNode`, when `editMode`: transition handles from `opacity-0 w-0 h-0` to visible on hover — small coloured ring, `cursor-crosshair`
 
-### 6.x — Right-Click Node Context Menu
-- Toggle deceased at current chapter
-- Edit display name
-- Rename at unit (adds rename event preserving history)
-- Delete character (with confirmation; cascades relationships)
+#### 6.10.2 — Draw a new relationship
+- [ ] Add `onConnect` prop to `GraphCanvas` (React Flow `OnConnect` type); only registered on `<ReactFlow>` when `editMode` is true
+- [ ] `handleAddRelationship(connection)` in `App.tsx`: create stub `Relationship` — `id: crypto.randomUUID()`, `seriesId`, `fromId/toId` from connection, `kind: 'ally'`, `label: 'ally'`, `directed: false`, `introducedAt: currentUnit`, `endedAt: null`; append to `editGraph.relationships`, save; immediately open `RelationshipEditPanel` for the new edge
 
-### 6.x — Add / Remove Chapters
-- "Add Chapter" increments `totalUnits`; scrubber grows
-- Chapter labels visible as ticks on the scrubber
+#### 6.10.3 — `RelationshipEditPanel` component
+- [ ] `src/components/RelationshipEditPanel.tsx` — same slide-in shell as `CharacterEditPanel` (`absolute right-3 top-4 bottom-4 w-72`)
+- [ ] Fields: **Label** (text), **Kind** (select — `family | parent_child | romantic | ally | rival | enemy | mentor | other`), **Directed** (toggle), **Introduced at** (number), **Ended at** (number, optional — blank = still active)
+- [ ] Name propagates on `onChange`; numeric and select fields commit on blur (same pattern as `CharacterEditPanel`)
+- [ ] **Delete** button at the bottom — calls `onDelete(id)`, closes panel
+- [ ] `useEffect([relationship.id])` resets local state when a different edge is selected
 
-### ~~6.x — Edit Existing Backend Graph (full fidelity)~~ ✅ (resolved in 6.2)
-- `GET /api/series/:id/graph/full` returns all characters and all relationships regardless of `ended_at`
-- `useFullGraph` hook consumes it; `handleToggleEditMode` uses it as the edit base — no merge workaround needed
+#### 6.10.4 — Wire edge selection
+- [ ] `onSelectRelationship?: (rel: Relationship | null) => void` prop on `GraphCanvas`
+- [ ] `onEdgeClick` in `GraphCanvas`: look up `Relationship` by `edge.id` in `snapshot.relationships`, call `onSelectRelationship`
+- [ ] `panelRelationship` + `relPanelOpen` state in `App.tsx` (same RAF open / timer close pattern as character panel)
+- [ ] In edit mode, render `RelationshipEditPanel`; `handleUpdateRelationship` patches the matching entry in `editGraph.relationships`, saves
 
-### 6.x — Backend Persistence
+#### 6.10.5 — Delete relationship
+- [ ] `handleDeleteRelationship(id)` in `App.tsx`: filter from `editGraph.relationships`, save, close panel
+- [ ] Wire `onEdgesDelete` on `<ReactFlow>` in edit mode — React Flow fires this on `Delete`/`Backspace` key when an edge is selected; handler calls `handleDeleteRelationship` for each deleted edge
+
+---
+
+### 6.11 — Right-Click Node Context Menu
+
+#### 6.11.1 — `NodeContextMenu` component
+- [ ] `src/components/NodeContextMenu.tsx` — `position: fixed` div at `{ x, y }` (screen coordinates from the right-click event)
+- [ ] Menu items as `<button>` rows with consistent hover style (`hover:bg-white/10`, `text-xs`)
+- [ ] Close on outside `mousedown` (`useEffect` + document listener) or `Escape` key
+- [ ] `z-50` to float above everything; `pointer-events-auto`
+
+#### 6.11.2 — Wire `onNodeContextMenu` in `GraphCanvas`
+- [ ] Add `onNodeContextMenu?: (id: string, position: { x: number; y: number }) => void` prop
+- [ ] In `GraphCanvas`, attach `onNodeContextMenu` to `<ReactFlow>` only when the prop is set; call `e.preventDefault()` and forward `{ id: node.id, position: { x: e.clientX, y: e.clientY } }`
+
+#### 6.11.3 — Context menu actions in `App.tsx`
+- [ ] `contextMenuNodeId: string | null` + `contextMenuPos: { x: number; y: number } | null` state; set by `handleNodeContextMenu`
+- [ ] Render `<NodeContextMenu>` when `editMode && contextMenuNodeId !== null`
+- [ ] **Edit** — call `handleSelectCharacter(character)` (opens `CharacterEditPanel`); close menu
+- [ ] **Toggle deceased** — if `diedAt === null` or `diedAt > currentUnit`: set `diedAt = currentUnit`; else clear `diedAt = null`; update character in `editGraph`, save
+- [ ] **Delete character** — remove from `editGraph.characters`; filter out all relationships where `fromId === id || toId === id`; if this character was the panel character, close the panel; save
+
+---
+
+### 6.12 — Add / Remove Chapters
+
+#### 6.12.1 — Add chapter
+- [ ] Wire "New Chapter" toolbar button to `handleAddChapter` (replaces info toast)
+- [ ] `handleAddChapter`: increment `editGraph.series.totalUnits` by 1; advance `currentUnit` to the new last chapter; save
+
+#### 6.12.2 — Remove last chapter
+- [ ] Repurpose "New Block" toolbar button as "Remove Chapter" (update label and icon)
+- [ ] `handleRemoveChapter`: if `totalUnits === 1` show a warning toast and return; otherwise decrement `totalUnits`; clamp `currentUnit` to new total; set `diedAt = null` for characters whose `diedAt >= newTotal` (they outlive the new end); remove relationships whose `introducedAt > newTotal`; save
+
+#### 6.12.3 — Scrubber validation
+- [ ] Confirm `TimelineScrubber` correctly renders and resizes when `totalUnits` changes at runtime (no layout bugs on grow or shrink)
+- [ ] Confirm `onChange` is never fired with a unit outside `[1, totalUnits]` after a remove operation
+
+---
+
+## Future Phases (out of scope)
+
+### Edit Existing Backend Graphs
+- `GET /api/series/:id/graph/full` already implemented; wire "Edit Mode" to load any series into edit mode with full relationship history
+
+### Backend Persistence
 - `POST /api/series` — create series
 - `POST /api/import` — upsert characters + relationships
 - Save button posts the full edit graph converted to the import payload
 
-### 6.x — Bidirectional LTG Sync
+### Bidirectional LTG Sync
 - Canvas mutations produce LTG AST diffs; code editor reflects changes in real time
-- LTG source edits update the canvas without full re-compile
+- LTG source edits update the canvas without a full re-compile
+
+### Edit Timeline Visual Tool
+- Group chapters into volumes/arcs (LTG `group` construct)
+- Drag-resize arc spans on the scrubber
+
+### ~~Edit Existing Backend Graph (full fidelity)~~ ✅ (resolved in 6.2)
+- `useFullGraph` hook consumes `GET /graph/full`; `handleToggleEditMode` uses it as the edit base
