@@ -1,4 +1,5 @@
 import type { CompileSuccess } from './ltgLspClient'
+import type { GraphSnapshot } from '../types/domain'
 
 // ---------------------------------------------------------------------------
 // Raw shapes from CompileSuccess (matching openapi-langserver.yaml)
@@ -302,6 +303,129 @@ function emitBody(body: BlockBodyNode, indent: string): string[] {
 /** Compile a CompileSuccess directly to an LTG string. */
 export function emitLtg(compiled: CompileSuccess): string {
   return astToLtg(compiledToAst(compiled))
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot → AST (canvas-authored or compiled-derived graphs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a stable LTG identifier from a character's display name.
+ * Mirrors the Go backend `slugify` function.
+ * Uses `ltgIdentifier` when present so compiled-round-trip graphs stay stable.
+ */
+function slugifyName(name: string): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || 'char'
+  return /^[0-9]/.test(base) ? `c${base}` : base
+}
+
+/**
+ * Build a deduplicated identifier map for a set of characters.
+ * Prefers `ltgIdentifier` when present; derives a slug from `name` otherwise.
+ * Disambiguates duplicates with `_2`, `_3` suffixes.
+ */
+function buildIdentifierMap(characters: GraphSnapshot['characters']): Map<string, string> {
+  const map  = new Map<string, string>()
+  const used = new Set<string>()
+
+  // First pass: assign known identifiers.
+  for (const c of characters) {
+    if (c.ltgIdentifier) {
+      map.set(c.id, c.ltgIdentifier)
+      used.add(c.ltgIdentifier)
+    }
+  }
+
+  // Second pass: derive slugs for canvas-created characters.
+  for (const c of characters) {
+    if (map.has(c.id)) continue
+    const base = slugifyName(c.name)
+    let ident = base
+    let n = 2
+    while (used.has(ident)) ident = `${base}_${n++}`
+    map.set(c.id, ident)
+    used.add(ident)
+  }
+
+  return map
+}
+
+/**
+ * Convert a `GraphSnapshot` (canvas-authored or full-history) into an `LtgAst`.
+ *
+ * The graph must be the full unfiltered edit graph (all characters and
+ * relationships across all time), not a temporally-filtered display snapshot.
+ * Use `editGraph` directly, not the result of `editableToSnapshot`.
+ */
+export function snapshotToAst(graph: GraphSnapshot): LtgAst {
+  const idFor = buildIdentifierMap(graph.characters)
+
+  const slugLabel = (label: string) =>
+    label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || label
+
+  function bodyForUnit(unit: number, isInit: boolean): BlockBodyNode {
+    const actors: ActorNode[] = graph.characters
+      .filter(c => c.introducedAt === unit)
+      .map(c => ({ id: idFor.get(c.id)!, name: c.name }))
+
+    const links: LinkNode[] = graph.relationships
+      .filter(r => r.introducedAt === unit)
+      .map(r => ({
+        label:    slugLabel(r.label),
+        from:     idFor.get(r.fromId)!,
+        to:       idFor.get(r.toId)!,
+        directed: r.directed,
+      }))
+
+    // unlink in block N means endedAt = N-1
+    const unlinks: UnlinkNode[] = isInit ? [] : graph.relationships
+      .filter(r => r.endedAt !== null && r.endedAt === unit - 1)
+      .map(r => ({
+        label: slugLabel(r.label),
+        a:     idFor.get(r.fromId)!,
+        b:     idFor.get(r.toId)!,
+      }))
+
+    const deceased: DeceasedNode[] = isInit ? [] : graph.characters
+      .filter(c => c.diedAt === unit)
+      .map(c => ({ id: idFor.get(c.id)! }))
+
+    // Renames are not tracked in canvas edit mode; omit.
+    return { actors, links, unlinks, deceased, renames: [] }
+  }
+
+  const rawSeries: RawSeries = {
+    title:          graph.series.title,
+    mediaType:      graph.series.mediaType,
+    unitLabel:      graph.series.unitLabel,
+    totalUnits:     graph.series.totalUnits,
+    author:         graph.series.author    ?? null,
+    groupType:      graph.series.groupType ?? null,
+    customMetadata: graph.series.customMetadata,
+  }
+
+  const init = bodyForUnit(1, true)
+
+  const blocks: (BlockNode | GroupNode)[] = []
+  for (let i = 2; i <= graph.series.totalUnits; i++) {
+    blocks.push({ kind: 'block', index: i, label: null, body: bodyForUnit(i, false) })
+  }
+
+  return {
+    series:  rawSeries,
+    colours: (graph.colours ?? {}) as Record<string, string>,
+    init,
+    blocks,
+  }
+}
+
+/** Emit an LTG source string from a `GraphSnapshot`. */
+export function graphSnapshotToLtg(graph: GraphSnapshot): string {
+  return astToLtg(snapshotToAst(graph))
 }
 
 // ---------------------------------------------------------------------------

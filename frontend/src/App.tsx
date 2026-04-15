@@ -4,9 +4,9 @@ import type { Edge } from '@xyflow/react'
 import { useGraphData } from './hooks/useGraphData'
 import { useFullGraph } from './hooks/useFullGraph'
 import { useCompiledGraph } from './hooks/useCompiledGraph'
-import { compiledToSnapshot } from './lib/ltgCompiler'
+import { compiledToSnapshot, compiledToFullSnapshot } from './lib/ltgCompiler'
 import type { CompileSuccess } from './lib/ltgLspClient'
-import { emitLtg } from './lib/ltgEmitter'
+import { emitLtg, graphSnapshotToLtg } from './lib/ltgEmitter'
 import { editableToSnapshot } from './lib/editableToSnapshot'
 import { createEmptyGraph, saveEditGraph, loadEditGraph, saveViewerGraph, loadViewerGraph } from './lib/editGraphSession'
 import { useNotificationStore } from './lib/notificationStore'
@@ -254,6 +254,14 @@ export default function App() {
     handleOpenEditor()
   }, [localGraph, compiledGraphData, handleOpenEditor])
 
+  // Opens the code editor from edit mode, emitting the current canvas state as LTG.
+  // Always re-loads content so the user sees the latest canvas changes.
+  const handleOpenCodeEditorFromEdit = useCallback(() => {
+    if (!editGraph) return
+    setEditorContent(graphSnapshotToLtg(editGraph))
+    handleOpenEditor()
+  }, [editGraph, handleOpenEditor])
+
   const localSnapshot = useMemo(
     () => localGraph ? compiledToSnapshot(localGraph, currentUnit) : null,
     [localGraph, currentUnit],
@@ -298,10 +306,20 @@ export default function App() {
 
   const handleCompileAndRender = useCallback((graph: CompileSuccess) => {
     setLocalGraph(graph)
-    // Clamp currentUnit to the new graph's range.
     const total = (graph.series as { totalUnits: number }).totalUnits
     setCurrentUnit(prev => Math.min(prev, total))
-  }, [])
+
+    if (editMode) {
+      // In edit mode: make the compiled result the new edit base so canvas
+      // edits continue from the rendered graph rather than the old state.
+      const full = compiledToFullSnapshot(graph)
+      setEditGraph(full)
+      editBaseRef.current = full    // treat render as a clean save point
+      saveEditGraph(full)
+      saveViewerGraph(full)
+      setViewerGraph(full)
+    }
+  }, [editMode])
 
   const handleAddChapter = useCallback(() => {
     if (!editGraph) return
@@ -702,7 +720,7 @@ export default function App() {
           />
         )}
 
-        <SideToolbar hidden={menuOpen || editorOpen}>
+        <SideToolbar hidden={menuOpen || (editorOpen && !editMode)}>
           {editMode ? (
             <>
               <div className="pointer-events-auto">
@@ -750,6 +768,14 @@ export default function App() {
               </div>
               <div className="pointer-events-auto">
                 <ToolbarButton
+                  icon={<CodeEditorIcon />}
+                  label="Code Editor"
+                  onClick={handleOpenCodeEditorFromEdit}
+                  active={editorOpen}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
                   icon={<EditTimelineIcon />}
                   label="Edit Timeline"
                   onClick={() => addToast({ kind: 'info', title: 'Edit Timeline — coming soon' })}
@@ -786,14 +812,6 @@ export default function App() {
                   icon={<OpenInEditorIcon />}
                   label="Open in Editor"
                   onClick={handleOpenInEditor}
-                />
-              </div>
-              <div className="pointer-events-auto">
-                <ToolbarButton
-                  icon={<CodeEditorIcon />}
-                  label="Code Editor"
-                  onClick={handleToggleEditor}
-                  active={editorOpen}
                 />
               </div>
             </>

@@ -115,3 +115,62 @@ export function compiledToSnapshot(raw: CompileSuccess, atUnit: number): GraphSn
 
   return { series, characters, relationships, atUnit: clampedUnit, colours: raw.colours as Record<string, string> }
 }
+
+/**
+ * Convert a `CompileSuccess` graph into a full (temporally unfiltered)
+ * `GraphSnapshot` suitable for use as the `editGraph` base.
+ *
+ * Unlike `compiledToSnapshot`, this includes ALL characters and ALL
+ * relationships across every unit — no temporal filtering is applied.
+ * `editableToSnapshot(graph, atUnit)` applies the filter on demand.
+ *
+ * Character names are resolved at `totalUnits` (the latest effective name).
+ */
+export function compiledToFullSnapshot(raw: CompileSuccess): GraphSnapshot {
+  const rawSeries = raw.series        as RawSeries
+  const rawChars  = raw.characters    as RawCharacter[]
+  const rawRels   = raw.relationships as RawRelationship[]
+
+  const series: Series = {
+    id:         PREVIEW_SERIES_ID,
+    title:      rawSeries.title,
+    mediaType:  rawSeries.mediaType,
+    unitLabel:  rawSeries.unitLabel,
+    totalUnits: rawSeries.totalUnits,
+    ...(rawSeries.author    ? { author:    rawSeries.author }    : {}),
+    ...(rawSeries.groupType ? { groupType: rawSeries.groupType } : {}),
+  }
+
+  // All characters — no introducedAt filter.
+  const characters: Character[] = rawChars.map(c => ({
+    id:            c.identifier,
+    seriesId:      PREVIEW_SERIES_ID,
+    name:          effectiveName(c, rawSeries.totalUnits),
+    aliases:       c.aliases,
+    description:   null,
+    imageUrl:      null,
+    introducedAt:  c.introducedAt,
+    diedAt:        c.diedAt,
+    ltgIdentifier: c.identifier,
+  }))
+
+  // All relationships — no endedAt filter.
+  const relationships: Relationship[] = rawRels.map(r => ({
+    id:           `${r.fromIdentifier}::${r.label}::${r.toIdentifier}`,
+    seriesId:     PREVIEW_SERIES_ID,
+    fromId:       r.fromIdentifier,
+    toId:         r.toIdentifier,
+    label:        r.label,
+    directed:     r.directed,
+    introducedAt: r.introducedAt,
+    endedAt:      r.endedAt,
+  }))
+
+  return {
+    series,
+    characters,
+    relationships,
+    atUnit: rawSeries.totalUnits,
+    colours: raw.colours as Record<string, string>,
+  }
+}
