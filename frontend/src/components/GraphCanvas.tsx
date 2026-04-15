@@ -6,9 +6,11 @@ import {
   ReactFlow,
   useReactFlow,
   type Edge,
+  type EdgeMouseHandler,
   type Node,
   type NodeChange,
   type NodeMouseHandler,
+  type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -170,9 +172,13 @@ type Props = {
   onAddCharacter?: (character: Character) => void
   onCommitName?: (id: string, name: string) => void
   onCancelNode?: (id: string) => void
+  onConnect?: OnConnect
+  onSelectRelationship?: (rel: Relationship | null) => void
+  onEdgesDelete?: (edges: Edge[]) => void
+  onNodeContextMenu?: (id: string, position: { x: number; y: number }) => void
 }
 
-const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, editMode, addNodeTrigger, onAddCharacter, onCommitName, onCancelNode }: Props) => {
+const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, editMode, addNodeTrigger, onAddCharacter, onCommitName, onCancelNode, onConnect, onSelectRelationship, onEdgesDelete, onNodeContextMenu }: Props) => {
   const { characters, relationships, atUnit } = snapshot
   const colours = snapshot.colours
 
@@ -296,12 +302,19 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
   const animatedNodes = useMemo(
     () => allAnimatedNodes
       .filter(n => visibleIds.has(n.id))
-      .map(n => n.id === pendingNodeId
-        ? { ...n, data: { ...n.data, isNaming: true, onCommitName: handleCommitName, onCancelNode: handleCancelNode } }
-        : n,
-      ),
-    [allAnimatedNodes, visibleIds, pendingNodeId, handleCommitName, handleCancelNode],
+      .map(n => {
+        const base = editMode ? { ...n, data: { ...n.data, editMode: true } } : n
+        return n.id === pendingNodeId
+          ? { ...base, data: { ...base.data, isNaming: true, onCommitName: handleCommitName, onCancelNode: handleCancelNode } }
+          : base
+      }),
+    [allAnimatedNodes, visibleIds, editMode, pendingNodeId, handleCommitName, handleCancelNode],
   )
+
+  const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
+    const rel = snapshot.relationships.find(r => r.id === edge.id) ?? null
+    onSelectRelationship?.(rel)
+  }, [snapshot.relationships, onSelectRelationship])
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
     // Apply position changes to the full node set so dragged positions survive
@@ -353,6 +366,11 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
     if (menuOpen) onCloseMenu()
   }, [onSelectCharacter, onCloseMenu, menuOpen])
 
+  const handleNodeContextMenu: NodeMouseHandler = useCallback((event, node) => {
+    event.preventDefault()
+    onNodeContextMenu?.(node.id, { x: event.clientX, y: event.clientY })
+  }, [onNodeContextMenu])
+
   return (
     <ReactFlow
       nodes={animatedNodes}
@@ -362,6 +380,11 @@ const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showD
       onNodesChange={handleNodesChange}
       onNodeClick={onNodeClick}
       onPaneClick={onPaneClick}
+      onEdgeClick={onSelectRelationship ? onEdgeClick : undefined}
+      onNodeContextMenu={onNodeContextMenu ? handleNodeContextMenu : undefined}
+      onConnect={editMode ? onConnect : undefined}
+      onEdgesDelete={editMode ? onEdgesDelete : undefined}
+      deleteKeyCode={editMode ? 'Delete' : null}
       nodesDraggable
       minZoom={0.1}
       maxZoom={2}

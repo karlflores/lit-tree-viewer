@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Character, GraphSnapshot } from './types/domain'
+import type { Character, GraphSnapshot, Relationship } from './types/domain'
+import type { Edge } from '@xyflow/react'
 import { useGraphData } from './hooks/useGraphData'
 import { useFullGraph } from './hooks/useFullGraph'
 import { useCompiledGraph } from './hooks/useCompiledGraph'
@@ -7,7 +8,7 @@ import { compiledToSnapshot } from './lib/ltgCompiler'
 import type { CompileSuccess } from './lib/ltgLspClient'
 import { emitLtg } from './lib/ltgEmitter'
 import { editableToSnapshot } from './lib/editableToSnapshot'
-import { createEmptyGraph, saveEditGraph, loadEditGraph } from './lib/editGraphSession'
+import { createEmptyGraph, saveEditGraph, loadEditGraph, saveViewerGraph, loadViewerGraph } from './lib/editGraphSession'
 import { useNotificationStore } from './lib/notificationStore'
 import GraphCanvas from './components/GraphCanvas'
 import TimelineScrubber from './components/TimelineScrubber'
@@ -16,6 +17,9 @@ import MenuPanel from './components/MenuPanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import SideToolbar from './components/SideToolbar'
 import CharacterEditPanel from './components/CharacterEditPanel'
+import RelationshipEditPanel from './components/RelationshipEditPanel'
+import NodeContextMenu from './components/NodeContextMenu'
+import ConfirmDialog from './components/ConfirmDialog'
 import ToolbarButton from './components/ToolbarButton'
 import NotificationStack from './components/NotificationStack'
 import Toggle from './components/Toggle'
@@ -28,6 +32,12 @@ export default function App() {
   const [showDeceased, setShowDeceased] = useState(true)
   const [editMode, setEditMode] = useState(false)
   const [editGraph, setEditGraph] = useState<GraphSnapshot | null>(null)
+  // viewerGraph: the last explicitly saved edit graph — shown in viewer mode after exiting edit.
+  const [viewerGraph, setViewerGraph] = useState<GraphSnapshot | null>(() => loadViewerGraph())
+  // editBaseGraph: the state of editGraph when edit mode was last entered or saved.
+  // Used for dirty checking — any reference inequality means unsaved changes.
+  const editBaseRef = useRef<GraphSnapshot | null>(null)
+  const [showExitConfirm, setShowExitConfirm] = useState(false)
 
   const addToast = useNotificationStore(s => s.addToast)
 
@@ -36,6 +46,7 @@ export default function App() {
     const saved = loadEditGraph()
     if (saved) {
       setEditGraph(saved)
+      editBaseRef.current = saved
       setEditMode(true)
       setCurrentUnit(1)
     }
@@ -48,6 +59,14 @@ export default function App() {
   const [panelOpen, setPanelOpen]           = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openRafRef    = useRef<number | null>(null)
+
+  const [panelRelationship, setPanelRelationship] = useState<Relationship | null>(null)
+  const [relPanelOpen, setRelPanelOpen]           = useState(false)
+  const relCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const relOpenRafRef    = useRef<number | null>(null)
+
+  const [contextMenuNodeId, setContextMenuNodeId] = useState<string | null>(null)
+  const [contextMenuPos, setContextMenuPos]       = useState<{ x: number; y: number } | null>(null)
 
   const [menuMounted, setMenuMounted] = useState(false)
   const [menuOpen, setMenuOpen]       = useState(false)
@@ -64,6 +83,8 @@ export default function App() {
     return () => {
       if (closeTimerRef.current)              clearTimeout(closeTimerRef.current)
       if (openRafRef.current !== null)         cancelAnimationFrame(openRafRef.current)
+      if (relCloseTimerRef.current)           clearTimeout(relCloseTimerRef.current)
+      if (relOpenRafRef.current !== null)      cancelAnimationFrame(relOpenRafRef.current)
       if (menuCloseTimerRef.current)          clearTimeout(menuCloseTimerRef.current)
       if (menuOpenRafRef.current !== null)     cancelAnimationFrame(menuOpenRafRef.current)
       if (editorCloseTimerRef.current)        clearTimeout(editorCloseTimerRef.current)
@@ -144,8 +165,16 @@ export default function App() {
   }, [editorOpen, handleCloseEditor, handleOpenEditor])
 
   const handleSelectCharacter = useCallback((character: Character | null) => {
-    // Cancel any in-flight open RAF so a close that arrives before the next
-    // frame doesn't get overridden by a stale setPanelOpen(true).
+    // Close the relationship panel when opening a character panel and vice versa.
+    if (character && relOpenRafRef.current !== null) {
+      cancelAnimationFrame(relOpenRafRef.current)
+      relOpenRafRef.current = null
+    }
+    if (character) {
+      setRelPanelOpen(false)
+      relCloseTimerRef.current = setTimeout(() => setPanelRelationship(null), PANEL_CLOSE_MS)
+    }
+
     if (openRafRef.current !== null) {
       cancelAnimationFrame(openRafRef.current)
       openRafRef.current = null
@@ -154,7 +183,6 @@ export default function App() {
 
     if (character) {
       setPanelCharacter(character)
-      // Defer open so the panel mounts at translate-x-full before transitioning in.
       openRafRef.current = requestAnimationFrame(() => {
         openRafRef.current = null
         setPanelOpen(true)
@@ -162,6 +190,35 @@ export default function App() {
     } else {
       setPanelOpen(false)
       closeTimerRef.current = setTimeout(() => setPanelCharacter(null), PANEL_CLOSE_MS)
+    }
+  }, [])
+
+  const handleSelectRelationship = useCallback((rel: Relationship | null) => {
+    // Close the character panel when opening a relationship panel.
+    if (rel && openRafRef.current !== null) {
+      cancelAnimationFrame(openRafRef.current)
+      openRafRef.current = null
+    }
+    if (rel) {
+      setPanelOpen(false)
+      closeTimerRef.current = setTimeout(() => setPanelCharacter(null), PANEL_CLOSE_MS)
+    }
+
+    if (relOpenRafRef.current !== null) {
+      cancelAnimationFrame(relOpenRafRef.current)
+      relOpenRafRef.current = null
+    }
+    if (relCloseTimerRef.current) clearTimeout(relCloseTimerRef.current)
+
+    if (rel) {
+      setPanelRelationship(rel)
+      relOpenRafRef.current = requestAnimationFrame(() => {
+        relOpenRafRef.current = null
+        setRelPanelOpen(true)
+      })
+    } else {
+      setRelPanelOpen(false)
+      relCloseTimerRef.current = setTimeout(() => setPanelRelationship(null), PANEL_CLOSE_MS)
     }
   }, [])
 
@@ -216,8 +273,19 @@ export default function App() {
     [editMode, editGraph],
   )
 
+  // Viewer graph snapshots — shown after exiting edit mode when a graph has been saved.
+  const viewerSnapshot = useMemo(
+    () => viewerGraph ? editableToSnapshot(viewerGraph, currentUnit) : null,
+    [viewerGraph, currentUnit],
+  )
+  const fullViewerSnapshot = useMemo(
+    () => viewerGraph ? editableToSnapshot(viewerGraph, viewerGraph.series.totalUnits) : null,
+    [viewerGraph],
+  )
+
   const layoutSnapshot =
     fullEditableSnapshot ??
+    fullViewerSnapshot ??
     fullLocalSnapshot ??
     (fullGraphData.status === 'success' ? fullGraphData.snapshot : null) ??
     localSnapshot ??
@@ -230,10 +298,47 @@ export default function App() {
     setCurrentUnit(prev => Math.min(prev, total))
   }, [])
 
+  const handleAddChapter = useCallback(() => {
+    if (!editGraph) return
+    const newTotal = editGraph.series.totalUnits + 1
+    const next = {
+      ...editGraph,
+      series: { ...editGraph.series, totalUnits: newTotal },
+    }
+    setEditGraph(next)
+    saveEditGraph(next)
+    setCurrentUnit(newTotal)
+  }, [editGraph])
+
+  const handleRemoveChapter = useCallback(() => {
+    if (!editGraph) return
+    if (editGraph.series.totalUnits === 1) {
+      addToast({ kind: 'warning', title: 'Cannot remove the only chapter' })
+      return
+    }
+    const newTotal = editGraph.series.totalUnits - 1
+    const characters = editGraph.characters.map(c =>
+      c.diedAt !== null && c.diedAt > newTotal ? { ...c, diedAt: null } : c,
+    )
+    const relationships = editGraph.relationships
+      .filter(r => r.introducedAt <= newTotal)
+      .map(r => r.endedAt !== null && r.endedAt > newTotal ? { ...r, endedAt: null } : r)
+    const next = {
+      ...editGraph,
+      series: { ...editGraph.series, totalUnits: newTotal },
+      characters,
+      relationships,
+    }
+    setEditGraph(next)
+    saveEditGraph(next)
+    setCurrentUnit(prev => Math.min(prev, newTotal))
+  }, [editGraph, addToast])
+
   const handleNewGraph = useCallback(() => {
     const graph = createEmptyGraph()
     saveEditGraph(graph)
     setEditGraph(graph)
+    editBaseRef.current = graph
     setEditMode(true)
     setCurrentUnit(1)
   }, [])
@@ -241,13 +346,28 @@ export default function App() {
   const handleSaveGraph = useCallback(() => {
     if (!editGraph) return
     saveEditGraph(editGraph)
+    saveViewerGraph(editGraph)
+    setViewerGraph(editGraph)
+    editBaseRef.current = editGraph  // reset dirty baseline
     addToast({ kind: 'success', title: 'Saved' })
   }, [editGraph, addToast])
 
-  const handleExitEdit = useCallback(() => {
+  // doExitEdit: unconditional exit — no dirty check.
+  const doExitEdit = useCallback(() => {
     setEditGraph(null)
     setEditMode(false)
+    editBaseRef.current = null
+    setShowExitConfirm(false)
   }, [])
+
+  // handleExitEdit: user-facing exit — shows confirm dialog if there are unsaved changes.
+  const handleExitEdit = useCallback(() => {
+    if (editGraph !== null && editGraph !== editBaseRef.current) {
+      setShowExitConfirm(true)
+    } else {
+      doExitEdit()
+    }
+  }, [editGraph, doExitEdit])
 
   const [addNodeTrigger, setAddNodeTrigger] = useState(0)
 
@@ -283,6 +403,98 @@ export default function App() {
     saveEditGraph(next)
   }, [editGraph])
 
+  const handleAddRelationship = useCallback((connection: { source: string | null; target: string | null }) => {
+    if (!editGraph || !connection.source || !connection.target) return
+    const rel: Relationship = {
+      id:           crypto.randomUUID(),
+      seriesId:     editGraph.series.id,
+      fromId:       connection.source,
+      toId:         connection.target,
+      kind:         'ally',
+      label:        'ally',
+      directed:     false,
+      introducedAt: currentUnit,
+      endedAt:      null,
+    }
+    const next = { ...editGraph, relationships: [...editGraph.relationships, rel] }
+    setEditGraph(next)
+    saveEditGraph(next)
+    handleSelectRelationship(rel)
+  }, [editGraph, currentUnit, handleSelectRelationship])
+
+  const handleUpdateRelationship = useCallback((rel: Relationship) => {
+    if (!editGraph) return
+    const relationships = editGraph.relationships.map(r => r.id === rel.id ? rel : r)
+    const next = { ...editGraph, relationships }
+    setEditGraph(next)
+    saveEditGraph(next)
+    setPanelRelationship(rel)
+  }, [editGraph])
+
+  const handleDeleteRelationship = useCallback((id: string) => {
+    if (!editGraph) return
+    const relationships = editGraph.relationships.filter(r => r.id !== id)
+    const next = { ...editGraph, relationships }
+    setEditGraph(next)
+    saveEditGraph(next)
+    handleSelectRelationship(null)
+  }, [editGraph, handleSelectRelationship])
+
+  const handleEdgesDelete = useCallback((edges: Edge[]) => {
+    if (!editGraph) return
+    const ids = new Set(edges.map(e => e.id))
+    const relationships = editGraph.relationships.filter(r => !ids.has(r.id))
+    const next = { ...editGraph, relationships }
+    setEditGraph(next)
+    saveEditGraph(next)
+    if (panelRelationship && ids.has(panelRelationship.id)) handleSelectRelationship(null)
+  }, [editGraph, panelRelationship, handleSelectRelationship])
+
+  const handleNodeContextMenu = useCallback((id: string, position: { x: number; y: number }) => {
+    setContextMenuNodeId(id)
+    setContextMenuPos(position)
+  }, [])
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenuNodeId(null)
+    setContextMenuPos(null)
+  }, [])
+
+  const handleContextMenuEdit = useCallback(() => {
+    if (!contextMenuNodeId || !editGraph) return
+    const character = editGraph.characters.find(c => c.id === contextMenuNodeId) ?? null
+    handleSelectCharacter(character)
+  }, [contextMenuNodeId, editGraph, handleSelectCharacter])
+
+  const handleToggleDeceased = useCallback(() => {
+    if (!contextMenuNodeId || !editGraph) return
+    const character = editGraph.characters.find(c => c.id === contextMenuNodeId)
+    if (!character) return
+    const isDeceased = character.diedAt !== null && character.diedAt <= currentUnit
+    const updated = { ...character, diedAt: isDeceased ? null : currentUnit }
+    const characters = editGraph.characters.map(c => c.id === updated.id ? updated : c)
+    const next = { ...editGraph, characters }
+    setEditGraph(next)
+    saveEditGraph(next)
+    if (panelCharacter?.id === updated.id) setPanelCharacter(updated)
+  }, [contextMenuNodeId, editGraph, currentUnit, panelCharacter])
+
+  const handleContextMenuDelete = useCallback(() => {
+    if (!contextMenuNodeId || !editGraph) return
+    const characters = editGraph.characters.filter(c => c.id !== contextMenuNodeId)
+    const relationships = editGraph.relationships.filter(
+      r => r.fromId !== contextMenuNodeId && r.toId !== contextMenuNodeId,
+    )
+    const next = { ...editGraph, characters, relationships }
+    setEditGraph(next)
+    saveEditGraph(next)
+    if (panelCharacter?.id === contextMenuNodeId) handleSelectCharacter(null)
+    if (panelRelationship && (
+      panelRelationship.fromId === contextMenuNodeId ||
+      panelRelationship.toId === contextMenuNodeId
+    )) handleSelectRelationship(null)
+  }, [contextMenuNodeId, editGraph, panelCharacter, panelRelationship, handleSelectCharacter, handleSelectRelationship])
+
   const handleUpdateCharacter = useCallback((character: Character) => {
     if (!editGraph) return
     const characters = editGraph.characters.map(c => c.id === character.id ? character : c)
@@ -307,6 +519,7 @@ export default function App() {
       if (!base) return
       saveEditGraph(base)
       setEditGraph(base)
+      editBaseRef.current = base   // mark clean on entry
       setEditMode(true)
     }
   }, [editMode, handleExitEdit, fullGraphData, layoutSnapshot])
@@ -345,7 +558,7 @@ export default function App() {
   }, [editGraph])
 
   // Only block on loading/error when there is no local or edit preview to fall back to.
-  const hasLocalPreview = (editMode && editGraph !== null) || localSnapshot !== null
+  const hasLocalPreview = (editMode && editGraph !== null) || viewerSnapshot !== null || localSnapshot !== null
   if (!hasLocalPreview && graphData.status === 'loading') {
     return (
       <div className="h-screen bg-surface flex items-center justify-center text-white/40 text-sm">
@@ -363,7 +576,7 @@ export default function App() {
   }
 
   // Priority: edit graph → local compiled graph → backend snapshot.
-  const snapshot = editableSnapshot ?? localSnapshot ?? (graphData as Extract<typeof graphData, { status: 'success' }>).snapshot
+  const snapshot = editableSnapshot ?? viewerSnapshot ?? localSnapshot ?? (graphData as Extract<typeof graphData, { status: 'success' }>).snapshot
   const { series } = snapshot
 
   return (
@@ -413,6 +626,10 @@ export default function App() {
             onAddCharacter={editMode ? handleAddCharacter : undefined}
             onCommitName={editMode ? handleCommitName : undefined}
             onCancelNode={editMode ? handleCancelNode : undefined}
+            onConnect={editMode ? handleAddRelationship : undefined}
+            onSelectRelationship={editMode ? handleSelectRelationship : undefined}
+            onEdgesDelete={editMode ? handleEdgesDelete : undefined}
+            onNodeContextMenu={editMode ? handleNodeContextMenu : undefined}
           />
         </div>
 
@@ -437,6 +654,17 @@ export default function App() {
               colours={snapshot.colours}
             />
           )
+        )}
+
+        {panelRelationship && (
+          <RelationshipEditPanel
+            relationship={panelRelationship}
+            series={series}
+            isOpen={relPanelOpen}
+            onClose={() => handleSelectRelationship(null)}
+            onUpdate={handleUpdateRelationship}
+            onDelete={handleDeleteRelationship}
+          />
         )}
 
         {menuMounted && (
@@ -472,16 +700,16 @@ export default function App() {
               </div>
               <div className="pointer-events-auto">
                 <ToolbarButton
-                  icon={<NewBlockIcon />}
-                  label="New Block"
-                  onClick={() => addToast({ kind: 'info', title: 'New Block — coming soon' })}
+                  icon={<NewChapterIcon />}
+                  label="Add Chapter"
+                  onClick={handleAddChapter}
                 />
               </div>
               <div className="pointer-events-auto">
                 <ToolbarButton
-                  icon={<NewChapterIcon />}
-                  label="New Chapter"
-                  onClick={() => addToast({ kind: 'info', title: 'New Chapter — coming soon' })}
+                  icon={<RemoveChapterIcon />}
+                  label="Remove Chapter"
+                  onClick={handleRemoveChapter}
                 />
               </div>
               <div className="pointer-events-auto">
@@ -545,7 +773,36 @@ export default function App() {
           />
         )}
 
+        {editMode && contextMenuNodeId && contextMenuPos && (() => {
+          const character = snapshot.characters.find(c => c.id === contextMenuNodeId)
+          if (!character) return null
+          return (
+            <NodeContextMenu
+              character={character}
+              position={contextMenuPos}
+              currentUnit={currentUnit}
+              onEdit={handleContextMenuEdit}
+              onToggleDeceased={handleToggleDeceased}
+              onDelete={handleContextMenuDelete}
+              onClose={handleContextMenuClose}
+            />
+          )
+        })()}
+
         <NotificationStack />
+
+        {showExitConfirm && (
+          <ConfirmDialog
+            title="Unsaved changes"
+            message="You have unsaved changes. Save before exiting edit mode?"
+            confirmLabel="Save & Exit"
+            discardLabel="Discard changes"
+            cancelLabel="Keep editing"
+            onConfirm={() => { handleSaveGraph(); doExitEdit() }}
+            onDiscard={doExitEdit}
+            onCancel={() => setShowExitConfirm(false)}
+          />
+        )}
 
         <div
           className={[
@@ -638,11 +895,12 @@ function NewNodeIcon() {
   )
 }
 
-function NewBlockIcon() {
+function RemoveChapterIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
-      <rect x="1.5" y="4.5" width="8" height="6" rx="1" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M11 7h2.5M12.25 5.75v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M3 2.5h6.5a1 1 0 011 1V11a1 1 0 01-1 1H3a1 1 0 01-1-1V3.5a1 1 0 011-1z" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5 6h4M5 8h3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M11 3h2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   )
 }

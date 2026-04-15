@@ -11,13 +11,14 @@ export type CharacterNodeData = {
   character: Character
   atUnit: number
   isSelected: boolean
+  editMode?: boolean
   isNaming?: boolean
   onCommitName?: (id: string, name: string) => void
   onCancelNode?: (id: string) => void
 }
 
 const CharacterNode = memo(({ data }: NodeProps) => {
-  const { character, atUnit, isSelected, isNaming, onCommitName, onCancelNode } = data as CharacterNodeData
+  const { character, atUnit, isSelected, editMode, isNaming, onCommitName, onCancelNode } = data as CharacterNodeData
   const state = getCharacterState(character, atUnit)
   const deceased = state.status === 'deceased'
 
@@ -56,11 +57,15 @@ const CharacterNode = memo(({ data }: NodeProps) => {
     onCommitName?.(character.id, nameDraft)
   }
 
+  const handleClass = editMode
+    ? '!w-3 !h-3 opacity-0 group-hover:opacity-100 !bg-white/20 !border !border-white/40 !rounded-full transition-opacity duration-150'
+    : 'opacity-0 !w-0 !h-0 !min-w-0 !min-h-0 !p-0'
+
   return (
     <div
       style={{ opacity: mounted ? 1 : 0, transition: 'opacity 0.35s ease' }}
       className={[
-        'flex flex-col items-center gap-1 px-3 py-2 rounded-xl border select-none cursor-pointer',
+        'group flex flex-col items-center gap-1 px-3 py-2 rounded-xl border select-none cursor-pointer',
         'bg-panel text-white min-w-[80px]',
         deceased   ? 'opacity-40 border-border'        : 'border-border',
         isNaming   ? 'ring-2 ring-white/40 border-white/40' : '',
@@ -69,8 +74,8 @@ const CharacterNode = memo(({ data }: NodeProps) => {
       ].join(' ')}
     >
       {HANDLES.flatMap(pos => [
-        <Handle key={`s-${pos}`} type="source" position={pos} id={`s-${pos}`} className="opacity-0 !w-0 !h-0 !min-w-0 !min-h-0" />,
-        <Handle key={`t-${pos}`} type="target" position={pos} id={`t-${pos}`} className="opacity-0 !w-0 !h-0 !min-w-0 !min-h-0" />,
+        <Handle key={`s-${pos}`} type="source" position={pos} id={`s-${pos}`} isConnectable={editMode} className={handleClass} />,
+        <Handle key={`t-${pos}`} type="target" position={pos} id={`t-${pos}`} isConnectable={editMode} className={handleClass} />,
       ])}
 
       <div className={[

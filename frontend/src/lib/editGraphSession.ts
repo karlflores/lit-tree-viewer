@@ -53,3 +53,38 @@ export function clearEditGraph(): void {
     // ignore
   }
 }
+
+// ---------------------------------------------------------------------------
+// Viewer graph — the last explicitly saved graph shown in viewer mode.
+// Persisted to localStorage so it survives a page refresh.
+// ---------------------------------------------------------------------------
+
+const VIEWER_KEY = 'litree:viewer-graph'
+
+/** Persist the viewer graph to localStorage. */
+export function saveViewerGraph(graph: GraphSnapshot): void {
+  try {
+    localStorage.setItem(VIEWER_KEY, JSON.stringify(graph))
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Load the viewer graph from localStorage.
+ * Returns null if nothing is stored or the data is invalid.
+ */
+export function loadViewerGraph(): GraphSnapshot | null {
+  try {
+    const raw = localStorage.getItem(VIEWER_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || !parsed.series) {
+      localStorage.removeItem(VIEWER_KEY)
+      return null
+    }
+    return parsed as GraphSnapshot
+  } catch {
+    return null
+  }
+}

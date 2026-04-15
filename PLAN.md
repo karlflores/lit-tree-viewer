@@ -388,67 +388,60 @@ compilable directly to the LitTree domain model.
 
 ---
 
-#### 6.10 — Relationship Authoring
+#### 6.10 — Relationship Authoring ✅
 
-##### 6.10.1 — Edit mode connection handles
-- [ ] Add `editMode?: boolean` to `CharacterNodeData`; inject it in `GraphCanvas` when `editMode` is true
-- [ ] In `CharacterNode`, when `editMode`: show handles on hover (`opacity-0 group-hover:opacity-100`), give them a visible size and ring style
+##### 6.10.1 — Edit mode connection handles ✅
+- [x] `editMode?: boolean` added to `CharacterNodeData`; injected via `animatedNodes` memo in `GraphCanvas`
+- [x] Handles switch from `!w-0 !h-0` to `!w-3 !h-3 group-hover:opacity-100` when `editMode`; `isConnectable` gated on `editMode`
 
-##### 6.10.2 — Draw a new relationship
-- [ ] Add `onConnect` prop to `GraphCanvas` (React Flow `OnConnect` type)
-- [ ] `handleAddRelationship(connection)` in `App.tsx`: create stub `Relationship` (`id: crypto.randomUUID()`, `kind: 'ally'`, `label: 'ally'`, `directed: false`, `introducedAt: currentUnit`, `endedAt: null`); append to `editGraph.relationships`, save session
+##### 6.10.2 — Draw a new relationship ✅
+- [x] `onConnect` prop on `GraphCanvas`; `handleAddRelationship` in `App.tsx` creates stub (`kind: 'ally'`, `directed: false`, `introducedAt: currentUnit`); opens `RelationshipEditPanel` immediately
 
-##### 6.10.3 — `RelationshipEditPanel` component
-- [ ] New `src/components/RelationshipEditPanel.tsx` — same slide-in shell as `CharacterEditPanel`
-- [ ] Fields: **Label** (text), **Kind** (select — all `RelationshipKind` values), **Directed** (toggle), **Introduced at** (number), **Ended at** (number, optional)
-- [ ] **Delete** button at the bottom — calls `onDelete(id)`
-- [ ] Propagates on blur / change (same commit pattern as `CharacterEditPanel`)
+##### 6.10.3 — `RelationshipEditPanel` component ✅
+- [x] `src/components/RelationshipEditPanel.tsx` — same slide-in shell as `CharacterEditPanel`
+- [x] Fields: Label (live onChange), Kind (select, syncs label on change), Directed (Toggle + **Flip direction** button), From / Until (number, blur-commit)
+- [x] Delete button at bottom (destructive style)
 
-##### 6.10.4 — Wire edge selection
-- [ ] Add `onSelectRelationship?: (rel: Relationship | null) => void` prop to `GraphCanvas`
-- [ ] `onEdgeClick` in `GraphCanvas` → look up `Relationship` by id, call `onSelectRelationship`
-- [ ] `panelRelationship` + `panelRelOpen` state in `App.tsx` (same open/close timer pattern as `panelCharacter`)
-- [ ] In edit mode, render `RelationshipEditPanel`; `handleUpdateRelationship` patches `editGraph.relationships`
+##### 6.10.4 — Wire edge selection ✅
+- [x] `onEdgeClick` in `GraphCanvas` → `onSelectRelationship` prop
+- [x] `panelRelationship` + `relPanelOpen` state in `App.tsx` (RAF/timer open-close); mutual-exclusion with character panel
+- [x] `handleUpdateRelationship` patches `editGraph.relationships`; syncs `panelRelationship`
 
-##### 6.10.5 — Delete relationship
-- [ ] `handleDeleteRelationship(id)` in `App.tsx`: filter from `editGraph.relationships`, save
-- [ ] Also wire `onEdgesDelete` on `<ReactFlow>` so the keyboard `Delete` key works in edit mode
+##### 6.10.5 — Delete relationship ✅
+- [x] Delete button in panel → `handleDeleteRelationship`
+- [x] `onEdgesDelete` + `deleteKeyCode="Delete"` on `<ReactFlow>` in edit mode
 
 ---
 
-#### 6.11 — Right-Click Node Context Menu
+#### 6.11 — Right-Click Node Context Menu ✅
 
-##### 6.11.1 — `NodeContextMenu` component
-- [ ] New `src/components/NodeContextMenu.tsx` — floating `div` positioned at `{x, y}` (screen coords)
-- [ ] Items rendered as a vertical list of buttons with consistent hover style
-- [ ] Closes on outside click (`useEffect` + `mousedown` listener) or `Escape`
+##### 6.11.1 — `NodeContextMenu` component ✅
+- [x] `src/components/NodeContextMenu.tsx` — `position: fixed` at `{x, y}`; `z-50`
+- [x] Closes on outside mousedown (capture phase listener — bypasses React Flow's `stopPropagation`) or `Escape`
+- [x] Two-click delete confirmation with 2.5 s auto-reset
 
-##### 6.11.2 — Wire `onNodeContextMenu` in `GraphCanvas`
-- [ ] Add `onNodeContextMenu?: (id: string, position: { x: number; y: number }) => void` prop
-- [ ] `onNodeContextMenu` handler in `GraphCanvas` → call prop with node id and `{ x: event.clientX, y: event.clientY }`
-- [ ] Suppress browser default context menu via `e.preventDefault()`
+##### 6.11.2 — Wire `onNodeContextMenu` in `GraphCanvas` ✅
+- [x] `onNodeContextMenu` prop; handler calls `e.preventDefault()` and forwards node id + `{clientX, clientY}`
 
-##### 6.11.3 — Context menu actions in `App.tsx`
-- [ ] `contextMenuCharacter` + `contextMenuPos` state; set by `handleNodeContextMenu`
-- [ ] **Edit** — calls `handleSelectCharacter(character)` (opens `CharacterEditPanel`); closes menu
-- [ ] **Toggle deceased** — if `diedAt === null`: set `diedAt = currentUnit`; if already `diedAt === currentUnit`: clear to `null`; update in `editGraph`, save
-- [ ] **Delete character** — remove from `editGraph.characters`; filter out all relationships where `fromId === id || toId === id`; save; close panel if this character is selected
+##### 6.11.3 — Context menu actions in `App.tsx` ✅
+- [x] `contextMenuNodeId` + `contextMenuPos` state
+- [x] **Edit** — opens `CharacterEditPanel`
+- [x] **Toggle deceased** — sets/clears `diedAt = currentUnit`; updates panel character if open
+- [x] **Delete character** — cascades relationships; closes character/relationship panels if affected
 
 ---
 
-#### 6.12 — Add / Remove Chapters
+#### 6.12 — Add / Remove Chapters ✅
 
-##### 6.12.1 — Add chapter
-- [ ] Wire "New Chapter" toolbar button to `handleAddChapter` in `App.tsx` (replaces "coming soon" toast)
-- [ ] `handleAddChapter`: increment `editGraph.series.totalUnits` by 1, advance `currentUnit` to the new last chapter, save
+##### 6.12.1 — Add chapter ✅
+- [x] "New Chapter" toolbar button → `handleAddChapter`: increments `totalUnits`, advances `currentUnit` to new last chapter, saves
 
-##### 6.12.2 — Remove last chapter
-- [ ] Wire "New Block" toolbar button to `handleRemoveChapter` (repurpose stub; rename label to "Remove Chapter")
-- [ ] `handleRemoveChapter`: if `totalUnits === 1` show warning toast and return; otherwise decrement `totalUnits`; clamp `currentUnit` to new total; clear `diedAt` on characters whose `diedAt >= newTotal`; remove relationships whose `introducedAt > newTotal`; save
+##### 6.12.2 — Remove last chapter ✅
+- [x] "New Block" repurposed as "Remove Chapter" → `handleRemoveChapter`: guards `totalUnits === 1` with warning toast; decrements `totalUnits`; clamps `currentUnit`; clears `diedAt` for characters whose `diedAt > newTotal`; removes relationships with `introducedAt > newTotal`; clears `endedAt` for relationships where `endedAt > newTotal`
 
-##### 6.12.3 — Scrubber validation
-- [ ] Confirm `TimelineScrubber` resizes correctly when `totalUnits` changes dynamically (no layout bugs)
-- [ ] Confirm `onChange` is never called with a unit outside `[1, totalUnits]` after a remove
+##### 6.12.3 — Scrubber validation ✅
+- [x] `TimelineScrubber` reacts to `totalUnits` prop changes at runtime — no special handling needed (it's fully derived from props)
+- [x] `currentUnit` clamped in `handleRemoveChapter` before save; scrubber `onChange` cannot produce out-of-range values
 
 ---
 
