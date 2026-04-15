@@ -37,3 +37,11 @@ func (s *PGStore) GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (dom
 func (s *PGStore) GetFullGraph(ctx context.Context, seriesID uuid.UUID) (domain.GraphSnapshot, error) {
 	return GetFullGraph(ctx, s.pool, seriesID)
 }
+
+func (s *PGStore) CreateGraph(ctx context.Context, payload domain.ImportPayload) (uuid.UUID, error) {
+	return CreateGraph(ctx, s.pool, payload)
+}
+
+func (s *PGStore) ReplaceGraph(ctx context.Context, seriesID uuid.UUID, payload domain.ImportPayload) error {
+	return ReplaceGraph(ctx, s.pool, seriesID, payload)
+}

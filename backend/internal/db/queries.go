@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,6 +15,14 @@ import (
 
 	"lit-tree-viewer/internal/domain"
 )
+
+// scanSeries reads a series row that includes the custom_metadata JSONB column.
+// The caller must provide the raw JSON bytes; this function unmarshals them.
+func scanSeriesWithMeta(rawMeta []byte, s *domain.Series) {
+	if len(rawMeta) > 0 {
+		_ = json.Unmarshal(rawMeta, &s.CustomMetadata)
+	}
+}
 
 // slugify derives a valid LTG identifier from a character display name.
 // Rules mirror the frontend deriveIdentifier helper:
@@ -50,7 +59,7 @@ var ErrNotFound = errors.New("not found")
 // GetAllSeries returns every series, ordered by title.
 func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, title, media_type, unit_label, total_units, author, group_type
+		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata
 		FROM series
 		ORDER BY title
 	`)
@@ -62,9 +71,11 @@ func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, err
 	var results []domain.Series
 	for rows.Next() {
 		var s domain.Series
-		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType); err != nil {
+		var rawMeta []byte
+		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta); err != nil {
 			return nil, fmt.Errorf("scanning series row: %w", err)
 		}
+		scanSeriesWithMeta(rawMeta, &s)
 		results = append(results, s)
 	}
 	return results, rows.Err()
@@ -73,11 +84,12 @@ func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, err
 // GetSeriesByID returns a single series or ErrNotFound.
 func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domain.Series, error) {
 	var s domain.Series
+	var rawMeta []byte
 	err := pool.QueryRow(ctx, `
-		SELECT id, title, media_type, unit_label, total_units, author, group_type
+		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata
 		FROM series
 		WHERE id = $1
-	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType)
+	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Series{}, ErrNotFound
@@ -85,7 +97,149 @@ func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domai
 	if err != nil {
 		return domain.Series{}, fmt.Errorf("querying series %s: %w", id, err)
 	}
+	scanSeriesWithMeta(rawMeta, &s)
 	return s, nil
+}
+
+// customMetaJSON marshals a map to a JSON string for insertion into a JSONB column.
+// Returns nil when the map is empty (stored as NULL).
+func customMetaJSON(m map[string]string) interface{} {
+	if len(m) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(m)
+	return string(b) // passed as text, cast to jsonb in SQL via $N::jsonb
+}
+
+// kindStr converts a *RelationshipKind to *string for nullable DB insertion.
+func kindStr(k *domain.RelationshipKind) *string {
+	if k == nil {
+		return nil
+	}
+	s := string(*k)
+	return &s
+}
+
+// CreateGraph inserts a new series with all its characters and relationships in
+// a single transaction. The series UUID is assigned server-side and returned.
+func CreateGraph(ctx context.Context, pool *pgxpool.Pool, payload domain.ImportPayload) (uuid.UUID, error) {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var seriesID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		INSERT INTO series (title, media_type, unit_label, total_units, author, group_type, custom_metadata)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+		RETURNING id
+	`,
+		payload.Series.Title,
+		payload.Series.MediaType,
+		payload.Series.UnitLabel,
+		payload.Series.TotalUnits,
+		payload.Series.Author,
+		payload.Series.GroupType,
+		customMetaJSON(payload.Series.CustomMetadata),
+	).Scan(&seriesID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("inserting series: %w", err)
+	}
+
+	for _, c := range payload.Characters {
+		aliases := c.Aliases
+		if aliases == nil {
+			aliases = []string{}
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO characters (id, series_id, name, aliases, description, image_url, introduced_at, died_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, c.ID, seriesID, c.Name, aliases, c.Description, c.ImageURL, c.IntroducedAt, c.DiedAt)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("inserting character %s: %w", c.ID, err)
+		}
+	}
+
+	for _, r := range payload.Relationships {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO relationships (id, series_id, from_id, to_id, kind, label, directed, introduced_at, ended_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, r.ID, seriesID, r.FromID, r.ToID, kindStr(r.Kind), r.Label, r.Directed, r.IntroducedAt, r.EndedAt)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("inserting relationship %s: %w", r.ID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, fmt.Errorf("commit: %w", err)
+	}
+	return seriesID, nil
+}
+
+// ReplaceGraph updates series metadata and replaces all characters and
+// relationships in a single transaction. The DELETE cascades to character_renames
+// and relationships via ON DELETE CASCADE foreign keys.
+func ReplaceGraph(ctx context.Context, pool *pgxpool.Pool, seriesID uuid.UUID, payload domain.ImportPayload) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	_, err = tx.Exec(ctx, `
+		UPDATE series
+		SET title = $1, media_type = $2, unit_label = $3, total_units = $4,
+		    author = $5, group_type = $6, custom_metadata = $7::jsonb
+		WHERE id = $8
+	`,
+		payload.Series.Title,
+		payload.Series.MediaType,
+		payload.Series.UnitLabel,
+		payload.Series.TotalUnits,
+		payload.Series.Author,
+		payload.Series.GroupType,
+		customMetaJSON(payload.Series.CustomMetadata),
+		seriesID,
+	)
+	if err != nil {
+		return fmt.Errorf("updating series: %w", err)
+	}
+
+	// Delete cascades to relationships and character_renames via FK constraints.
+	_, err = tx.Exec(ctx, `DELETE FROM characters WHERE series_id = $1`, seriesID)
+	if err != nil {
+		return fmt.Errorf("deleting characters: %w", err)
+	}
+
+	for _, c := range payload.Characters {
+		aliases := c.Aliases
+		if aliases == nil {
+			aliases = []string{}
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO characters (id, series_id, name, aliases, description, image_url, introduced_at, died_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, c.ID, seriesID, c.Name, aliases, c.Description, c.ImageURL, c.IntroducedAt, c.DiedAt)
+		if err != nil {
+			return fmt.Errorf("inserting character %s: %w", c.ID, err)
+		}
+	}
+
+	for _, r := range payload.Relationships {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO relationships (id, series_id, from_id, to_id, kind, label, directed, introduced_at, ended_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		`, r.ID, seriesID, r.FromID, r.ToID, kindStr(r.Kind), r.Label, r.Directed, r.IntroducedAt, r.EndedAt)
+		if err != nil {
+			return fmt.Errorf("inserting relationship %s: %w", r.ID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 // GetCharactersAt returns all characters introduced at or before atUnit.

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { basicSetup, EditorView } from 'codemirror'
 import { EditorState } from '@codemirror/state'
+import { computeLtgChanges } from '../lib/ltgDiff'
 import { lintGutter, setDiagnostics, type Diagnostic as CMDiagnostic } from '@codemirror/lint'
 import { ltgLanguageSupport } from '../lib/ltgLanguage'
 import { LtgLspClient, type LspDiagnostic, type CompileSuccess } from '../lib/ltgLspClient'
@@ -384,11 +385,16 @@ type Props = {
   isOpen:              boolean
   onClose:             () => void
   onCompileAndRender:  (graph: CompileSuccess) => void
-  /** When set to a non-null string, replaces the entire editor document. */
+  /** One-shot: replaces the document and resets the cursor to the top. */
   externalContent?:    string | null
+  /**
+   * Live sync: replaces the document while preserving cursor position.
+   * Used for canvas → code auto-sync in edit mode.
+   */
+  syncContent?:        string | null
 }
 
-const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalContent }: Props) => {
+const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalContent, syncContent }: Props) => {
   const containerRef  = useRef<HTMLDivElement>(null)
   const viewRef       = useRef<EditorView | null>(null)
   const lspRef        = useRef<LtgLspClient | null>(null)
@@ -399,7 +405,9 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
   const [connected,   setConnected]   = useState(false)
   const [compiling,   setCompiling]   = useState(false)
   const [saved,       setSaved]       = useState(false)
+  const [synced,      setSynced]      = useState(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const { addToast, setDiagnosticSummary } = useNotificationStore()
 
@@ -476,6 +484,7 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
       lsp.didClose()
       lsp.disconnect()
       lspRef.current = null
@@ -501,6 +510,33 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
       lspRef.current.didChange(externalContent, docVersionRef.current)
     }
   }, [externalContent])
+
+  // ── Live sync (canvas → code) ────────────────────────────────────────────
+  // Applies a surgical line-level diff so only changed lines are rewritten.
+  // Unchanged lines (user comments, manual block labels, custom formatting)
+  // are left untouched. CodeMirror automatically adjusts the cursor for
+  // regions outside the changed hunks — no explicit selection remapping needed.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || syncContent == null) return
+
+    const currentContent = view.state.doc.toString()
+    const changes = computeLtgChanges(currentContent, syncContent)
+
+    if (changes.length === 0) return
+
+    view.dispatch({ changes })
+    saveDoc(syncContent)
+    if (lspRef.current) {
+      docVersionRef.current++
+      lspRef.current.didChange(syncContent, docVersionRef.current)
+    }
+
+    // Flash the "↻ synced" indicator for 1.5 s.
+    setSynced(true)
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
+    syncTimerRef.current = setTimeout(() => setSynced(false), 1500)
+  }, [syncContent])
 
   // ── Explicit save ─────────────────────────────────────────────────────────
   const handleSave = () => {
@@ -602,6 +638,10 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
 
         {/* Right — save + compile + expand + close */}
         <div className="flex items-center gap-1 shrink-0">
+          {synced && (
+            <span className="text-[11px] text-white/40 px-1 select-none">↻ synced</span>
+          )}
+
           <button
             onClick={handleSave}
             className="h-8 px-3 rounded-lg text-[11px] font-medium transition-colors

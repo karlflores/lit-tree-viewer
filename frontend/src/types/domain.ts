@@ -4,6 +4,15 @@
 
 export type MediaType = 'book' | 'show' | 'film'
 
+/**
+ * One organisational group (arc / volume / season) spanning a range of blocks.
+ * `range` is inclusive: [firstBlockIndex, lastBlockIndex].
+ */
+export type BlockGroup = Readonly<{
+  label: string
+  range: readonly [number, number]
+}>
+
 export type Series = Readonly<{
   id: string
   title: string
@@ -15,6 +24,10 @@ export type Series = Readonly<{
   groupType?: string
   // Arbitrary key-value metadata tags (LTG: `metadata <key>: "<value>"`)
   customMetadata?: Readonly<Record<string, string>>
+  // Block display labels, e.g. { 3: "The Storm" }  →  `new chapter: "The Storm"`
+  blockLabels?: Readonly<Record<number, string>>
+  // Ordered group containers, e.g. [{ label: "Volume I", range: [2, 8] }]
+  blockGroups?: readonly BlockGroup[]
 }>
 
 // ============================================================

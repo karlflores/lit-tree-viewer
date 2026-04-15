@@ -29,13 +29,61 @@ const (
 // Series is the top-level container for a graph.
 // Author and GroupType are populated only for LTG-imported series; nil for seed data.
 type Series struct {
-	ID         uuid.UUID `json:"id"`
-	Title      string    `json:"title"`
-	MediaType  MediaType `json:"mediaType"`
-	UnitLabel  string    `json:"unitLabel"`
-	TotalUnits int       `json:"totalUnits"`
-	Author     *string   `json:"author,omitempty"`    // from `metadata author:`
-	GroupType  *string   `json:"groupType,omitempty"` // from `set group:`
+	ID             uuid.UUID         `json:"id"`
+	Title          string            `json:"title"`
+	MediaType      MediaType         `json:"mediaType"`
+	UnitLabel      string            `json:"unitLabel"`
+	TotalUnits     int               `json:"totalUnits"`
+	Author         *string           `json:"author,omitempty"`         // from `metadata author:`
+	GroupType      *string           `json:"groupType,omitempty"`      // from `set group:`
+	CustomMetadata map[string]string `json:"customMetadata,omitempty"` // from arbitrary `metadata <key>:` tags
+}
+
+// ---------------------------------------------------------------------------
+// Import payload types — used by POST /api/series and PATCH /api/series/:id
+// ---------------------------------------------------------------------------
+
+// ImportSeries carries the series-level fields from an edit-mode graph.
+// The ID is omitted — POST creates a new one, PATCH uses the URL parameter.
+type ImportSeries struct {
+	Title          string            `json:"title"`
+	MediaType      MediaType         `json:"mediaType"`
+	UnitLabel      string            `json:"unitLabel"`
+	TotalUnits     int               `json:"totalUnits"`
+	Author         *string           `json:"author,omitempty"`
+	GroupType      *string           `json:"groupType,omitempty"`
+	CustomMetadata map[string]string `json:"customMetadata,omitempty"`
+}
+
+// ImportCharacter carries one character from an edit-mode graph.
+// The ID is client-generated (crypto.randomUUID) and used as the DB primary key.
+type ImportCharacter struct {
+	ID           uuid.UUID `json:"id"`
+	Name         string    `json:"name"`
+	Aliases      []string  `json:"aliases"`
+	Description  *string   `json:"description,omitempty"`
+	ImageURL     *string   `json:"imageUrl,omitempty"`
+	IntroducedAt int       `json:"introducedAt"`
+	DiedAt       *int      `json:"diedAt,omitempty"`
+}
+
+// ImportRelationship carries one relationship from an edit-mode graph.
+type ImportRelationship struct {
+	ID           uuid.UUID         `json:"id"`
+	FromID       uuid.UUID         `json:"fromId"`
+	ToID         uuid.UUID         `json:"toId"`
+	Kind         *RelationshipKind `json:"kind,omitempty"`
+	Label        string            `json:"label"`
+	Directed     bool              `json:"directed"`
+	IntroducedAt int               `json:"introducedAt"`
+	EndedAt      *int              `json:"endedAt,omitempty"`
+}
+
+// ImportPayload is the full request body for POST /api/series and PATCH /api/series/:id.
+type ImportPayload struct {
+	Series        ImportSeries        `json:"series"`
+	Characters    []ImportCharacter   `json:"characters"`
+	Relationships []ImportRelationship `json:"relationships"`
 }
 
 // CharacterRename records one temporal name change for a character.

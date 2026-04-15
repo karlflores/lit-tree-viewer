@@ -410,9 +410,47 @@ export function snapshotToAst(graph: GraphSnapshot): LtgAst {
 
   const init = bodyForUnit(1, true)
 
+  // ---------------------------------------------------------------------------
+  // Build block list, respecting blockGroups and blockLabels from the series.
+  // Blocks inside a group are nested under a GroupNode; others are standalone.
+  // ---------------------------------------------------------------------------
+  const blockLabels = graph.series.blockLabels ?? {}
+  const blockGroups = graph.series.blockGroups ?? []
+
+  // Map every block index to the index of its containing group (if any).
+  const indexToGroupIdx = new Map<number, number>()
+  for (let gi = 0; gi < blockGroups.length; gi++) {
+    const [start, end] = blockGroups[gi]!.range
+    for (let b = start; b <= end; b++) indexToGroupIdx.set(b, gi)
+  }
+
   const blocks: (BlockNode | GroupNode)[] = []
-  for (let i = 2; i <= graph.series.totalUnits; i++) {
-    blocks.push({ kind: 'block', index: i, label: null, body: bodyForUnit(i, false) })
+  let bi = 2
+  while (bi <= graph.series.totalUnits) {
+    const gi = indexToGroupIdx.get(bi)
+    if (gi !== undefined) {
+      const group = blockGroups[gi]!
+      const [start, end] = group.range
+      const groupBlocks: BlockNode[] = []
+      for (let b = start; b <= Math.min(end, graph.series.totalUnits); b++) {
+        groupBlocks.push({
+          kind:  'block',
+          index: b,
+          label: (blockLabels as Record<number, string>)[b] ?? null,
+          body:  bodyForUnit(b, false),
+        })
+      }
+      blocks.push({ kind: 'group', label: group.label, blocks: groupBlocks })
+      bi = Math.min(end, graph.series.totalUnits) + 1
+    } else {
+      blocks.push({
+        kind:  'block',
+        index: bi,
+        label: (blockLabels as Record<number, string>)[bi] ?? null,
+        body:  bodyForUnit(bi, false),
+      })
+      bi++
+    }
   }
 
   return {

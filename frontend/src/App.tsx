@@ -9,6 +9,8 @@ import type { CompileSuccess } from './lib/ltgLspClient'
 import { emitLtg, graphSnapshotToLtg } from './lib/ltgEmitter'
 import { editableToSnapshot } from './lib/editableToSnapshot'
 import { createEmptyGraph, saveEditGraph, loadEditGraph, saveViewerGraph, loadViewerGraph } from './lib/editGraphSession'
+import { graphSnapshotToImport, applyIdRemap, isBackendId } from './lib/importPayload'
+import { createGraph, patchGraph } from './api/client'
 import { useNotificationStore } from './lib/notificationStore'
 import GraphCanvas from './components/GraphCanvas'
 import TimelineScrubber from './components/TimelineScrubber'
@@ -244,6 +246,22 @@ export default function App() {
   // Content to push into the code editor (set by "Open in Editor" toolbar button).
   const [editorContent, setEditorContent] = useState<string | null>(null)
 
+  // Live sync: canvas → code editor (debounced, edit mode only).
+  const [editorSyncContent, setEditorSyncContent] = useState<string | null>(null)
+  const syncDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (!editMode || !editorOpen || !editGraph) return
+    if (syncDebounceRef.current) clearTimeout(syncDebounceRef.current)
+    syncDebounceRef.current = setTimeout(() => {
+      if (Date.now() < skipSyncUntilRef.current) return
+      setEditorSyncContent(graphSnapshotToLtg(editGraph))
+    }, 500)
+    return () => {
+      if (syncDebounceRef.current) clearTimeout(syncDebounceRef.current)
+    }
+  }, [editGraph, editMode, editorOpen])
+
   const handleOpenInEditor = useCallback(() => {
     // Prefer a locally compiled graph (from the editor's Render button); fall
     // back to the eagerly-prefetched compiled graph from the backend.
@@ -304,20 +322,23 @@ export default function App() {
     localSnapshot ??
     (graphData.status === 'success' ? graphData.snapshot : null)
 
+  // Suppress canvas→code sync for 1 s after a Render so the editor isn't
+  // immediately overwritten with a re-emission of what the user just typed.
+  const skipSyncUntilRef = useRef(0)
+
   const handleCompileAndRender = useCallback((graph: CompileSuccess) => {
     setLocalGraph(graph)
     const total = (graph.series as { totalUnits: number }).totalUnits
     setCurrentUnit(prev => Math.min(prev, total))
 
     if (editMode) {
-      // In edit mode: make the compiled result the new edit base so canvas
-      // edits continue from the rendered graph rather than the old state.
       const full = compiledToFullSnapshot(graph)
       setEditGraph(full)
-      editBaseRef.current = full    // treat render as a clean save point
+      editBaseRef.current = full
       saveEditGraph(full)
       saveViewerGraph(full)
       setViewerGraph(full)
+      skipSyncUntilRef.current = Date.now() + 1000
     }
   }, [editMode])
 
@@ -366,12 +387,38 @@ export default function App() {
     setCurrentUnit(1)
   }, [])
 
-  const handleSaveGraph = useCallback(() => {
+  const handleSaveGraph = useCallback(async () => {
     if (!editGraph) return
+
+    // Immediate local save — gives instant feedback regardless of network.
     saveEditGraph(editGraph)
     saveViewerGraph(editGraph)
     setViewerGraph(editGraph)
-    editBaseRef.current = editGraph  // reset dirty baseline
+    editBaseRef.current = editGraph
+
+    // Backend persistence — POST for new graphs, PATCH for existing ones.
+    const { payload, idMap } = graphSnapshotToImport(editGraph)
+
+    if (isBackendId(editGraph.series.id)) {
+      const result = await patchGraph(editGraph.series.id, payload)
+      if (result.isErr()) {
+        addToast({ kind: 'error', title: 'Server sync failed' })
+        return
+      }
+    } else {
+      const result = await createGraph(payload)
+      if (result.isErr()) {
+        addToast({ kind: 'error', title: 'Could not save to server' })
+        return
+      }
+      // Remap all client-side ids to the stable UUIDs we just sent to the DB.
+      const remapped = applyIdRemap(editGraph, result.value.id, idMap)
+      setEditGraph(remapped)
+      editBaseRef.current = remapped
+      saveEditGraph(remapped)
+      saveViewerGraph(remapped)
+      setViewerGraph(remapped)
+    }
     addToast({ kind: 'success', title: 'Saved' })
   }, [editGraph, addToast])
 
@@ -632,7 +679,7 @@ export default function App() {
               onChange={handleTitleChange}
               onBlur={handleTitleCommit}
               onKeyDown={handleTitleKeyDown}
-              className="bg-transparent text-white/70 text-sm outline-none border-b border-transparent focus:border-white/30 placeholder:text-white/30 w-40 transition-colors duration-150"
+              className="bg-transparent text-white/70 text-sm leading-[1.25rem] p-0 outline-none border-b border-transparent focus:border-white/30 placeholder:text-white/30 w-40 transition-colors duration-150"
             />
           ) : (
             <span className="text-white/70 text-sm">{series.title}</span>
@@ -824,6 +871,7 @@ export default function App() {
             onClose={handleCloseEditor}
             onCompileAndRender={handleCompileAndRender}
             externalContent={editorContent}
+            syncContent={editorSyncContent}
           />
         )}
 

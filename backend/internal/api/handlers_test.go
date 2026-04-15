@@ -55,6 +55,14 @@ func (m *mockStore) GetCompiledGraph(_ context.Context, _ uuid.UUID) (domain.Com
 	return domain.CompiledGraph{}, nil
 }
 
+func (m *mockStore) CreateGraph(_ context.Context, _ domain.ImportPayload) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (m *mockStore) ReplaceGraph(_ context.Context, _ uuid.UUID, _ domain.ImportPayload) error {
+	return nil
+}
+
 // ── fixtures ──────────────────────────────────────────────────────────────────
 
 var (

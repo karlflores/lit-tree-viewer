@@ -1,4 +1,4 @@
-import type { Character, GraphSnapshot, Relationship, Series } from '../types/domain'
+import type { BlockGroup, Character, GraphSnapshot, Relationship, Series } from '../types/domain'
 import type { CompileSuccess } from './ltgLspClient'
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,48 @@ type RawRelationship = {
 
 const PREVIEW_SERIES_ID = 'preview'
 
+type RawBlock = {
+  index:      number
+  label:      string | null
+  groupLabel: string | null
+}
+
+/**
+ * Extract `blockLabels` and `blockGroups` from a list of raw blocks so that
+ * the canvas round-trip preserves block display labels and arc groupings.
+ */
+function extractBlockMeta(rawBlocks: RawBlock[]): {
+  blockLabels?: Readonly<Record<number, string>>
+  blockGroups?: readonly BlockGroup[]
+} {
+  const labels: Record<number, string> = {}
+  for (const b of rawBlocks) {
+    if (b.label) labels[b.index] = b.label
+  }
+
+  // Build groups in order of first appearance, extending ranges as we
+  // encounter consecutive blocks that share the same groupLabel.
+  const groups: { label: string; range: [number, number] }[] = []
+  const groupMap = new Map<string, { label: string; range: [number, number] }>()
+
+  for (const b of rawBlocks) {
+    if (!b.groupLabel) continue
+    const existing = groupMap.get(b.groupLabel)
+    if (existing) {
+      existing.range[1] = b.index   // extend to include this block
+    } else {
+      const g = { label: b.groupLabel, range: [b.index, b.index] as [number, number] }
+      groupMap.set(b.groupLabel, g)
+      groups.push(g)
+    }
+  }
+
+  return {
+    ...(Object.keys(labels).length > 0 ? { blockLabels: labels } : {}),
+    ...(groups.length > 0             ? { blockGroups: groups  } : {}),
+  }
+}
+
 /** Resolve a character's display name at a given unit (most recent rename ≤ unit). */
 function effectiveName(char: RawCharacter, atUnit: number): string {
   const applicable = char.renames
@@ -66,8 +108,10 @@ export function compiledToSnapshot(raw: CompileSuccess, atUnit: number): GraphSn
   const rawSeries  = raw.series        as RawSeries
   const rawChars   = raw.characters    as RawCharacter[]
   const rawRels    = raw.relationships as RawRelationship[]
+  const rawBlocks  = raw.blocks        as RawBlock[]
 
   const clampedUnit = Math.min(Math.max(1, atUnit), rawSeries.totalUnits)
+  const blockMeta   = extractBlockMeta(rawBlocks)
 
   const series: Series = {
     id:         PREVIEW_SERIES_ID,
@@ -77,6 +121,7 @@ export function compiledToSnapshot(raw: CompileSuccess, atUnit: number): GraphSn
     totalUnits: rawSeries.totalUnits,
     ...(rawSeries.author    ? { author:    rawSeries.author }    : {}),
     ...(rawSeries.groupType ? { groupType: rawSeries.groupType } : {}),
+    ...blockMeta,
   }
 
   const characters: Character[] = rawChars
@@ -130,6 +175,9 @@ export function compiledToFullSnapshot(raw: CompileSuccess): GraphSnapshot {
   const rawSeries = raw.series        as RawSeries
   const rawChars  = raw.characters    as RawCharacter[]
   const rawRels   = raw.relationships as RawRelationship[]
+  const rawBlocks = raw.blocks        as RawBlock[]
+
+  const blockMeta = extractBlockMeta(rawBlocks)
 
   const series: Series = {
     id:         PREVIEW_SERIES_ID,
@@ -139,6 +187,7 @@ export function compiledToFullSnapshot(raw: CompileSuccess): GraphSnapshot {
     totalUnits: rawSeries.totalUnits,
     ...(rawSeries.author    ? { author:    rawSeries.author }    : {}),
     ...(rawSeries.groupType ? { groupType: rawSeries.groupType } : {}),
+    ...blockMeta,
   }
 
   // All characters — no introducedAt filter.

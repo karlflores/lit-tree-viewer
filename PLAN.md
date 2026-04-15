@@ -447,118 +447,45 @@ compilable directly to the LitTree domain model.
 
 ---
 
-#### 6.13 — Backend Persistence
+#### 6.13 — Backend Persistence ✅
 
-> Persist canvas-authored graphs to the database. The frontend already holds the full
-> graph in `editGraph: GraphSnapshot`; this phase writes it to PostgreSQL and returns
-> a stable server-assigned UUID so future saves use PATCH instead of POST.
+##### 6.13.1 — Migration 007: `custom_metadata` on `series` ✅
+- [x] `007_series_custom_metadata.up.sql` / `.down.sql`
+- [x] `domain.Series.CustomMetadata map[string]string` — scanned via `json.Unmarshal` on raw JSONB bytes; written with `::jsonb` cast
 
-##### 6.13.1 — Migration 007: `custom_metadata` on `series`
-- [ ] `backend/migrations/up/007_series_custom_metadata.up.sql`: `ALTER TABLE series ADD COLUMN custom_metadata JSONB DEFAULT NULL`
-- [ ] `backend/migrations/down/007_series_custom_metadata.down.sql`: `ALTER TABLE series DROP COLUMN custom_metadata`
-- [ ] Update `domain.Series` to add `CustomMetadata map[string]string \`json:"customMetadata,omitempty"\``
-- [ ] Update `GetAllSeries` and `GetSeriesByID` queries to scan the new column
-- [ ] Update `GetCompiledGraph` to include `customMetadata` in the `CompiledGraph.Series` so the LTG emitter can emit `metadata <key>: "<value>"` tags
+##### 6.13.2 — Backend: `ImportPayload` domain type ✅
+- [x] `ImportSeries`, `ImportCharacter`, `ImportRelationship`, `ImportPayload` in `domain/types.go`
+- [x] `validateImportPayload` in `handlers.go`: title required, `totalUnits >= 1`, valid mediaType, all `introducedAt >= 1`, relationship endpoints reference payload characters
 
-##### 6.13.2 — Backend: `ImportPayload` domain type
-- [ ] Add `domain.ImportPayload` to `types.go`:
-  ```go
-  type ImportSeries struct {
-    Title          string            `json:"title"`
-    MediaType      MediaType         `json:"mediaType"`
-    UnitLabel      string            `json:"unitLabel"`
-    TotalUnits     int               `json:"totalUnits"`
-    Author         *string           `json:"author,omitempty"`
-    GroupType      *string           `json:"groupType,omitempty"`
-    CustomMetadata map[string]string `json:"customMetadata,omitempty"`
-  }
+##### 6.13.3 — Backend: `CreateGraph` store function ✅
+- [x] Single transaction: `INSERT INTO series RETURNING id` → batch insert characters → batch insert relationships
 
-  type ImportCharacter struct {
-    ID           uuid.UUID  `json:"id"`
-    Name         string     `json:"name"`
-    Aliases      []string   `json:"aliases"`
-    Description  *string    `json:"description,omitempty"`
-    ImageURL     *string    `json:"imageUrl,omitempty"`
-    IntroducedAt int        `json:"introducedAt"`
-    DiedAt       *int       `json:"diedAt,omitempty"`
-  }
+##### 6.13.4 — Backend: `ReplaceGraph` store function ✅
+- [x] Single transaction: `UPDATE series` → `DELETE FROM characters` (cascades) → batch insert characters → batch insert relationships
+- [x] `blocks` and `series_colours` are untouched
 
-  type ImportRelationship struct {
-    ID           uuid.UUID         `json:"id"`
-    FromID       uuid.UUID         `json:"fromId"`
-    ToID         uuid.UUID         `json:"toId"`
-    Kind         *RelationshipKind `json:"kind,omitempty"`
-    Label        string            `json:"label"`
-    Directed     bool              `json:"directed"`
-    IntroducedAt int               `json:"introducedAt"`
-    EndedAt      *int              `json:"endedAt,omitempty"`
-  }
+##### 6.13.5 — Backend: `POST /api/series` handler ✅
+- [x] `createSeries` handler → `201 { "id": "<uuid>" }`
 
-  type ImportPayload struct {
-    Series        ImportSeries        `json:"series"`
-    Characters    []ImportCharacter   `json:"characters"`
-    Relationships []ImportRelationship `json:"relationships"`
-  }
-  ```
-- [ ] Validate: `totalUnits >= 1`, `mediaType` in `{book, show, film}`, all `introducedAt >= 1`, relationship endpoints reference characters present in the payload
+##### 6.13.6 — Backend: `PATCH /api/series/:id` handler ✅
+- [x] `patchSeries` handler → `200 Series`; 404 if not found
 
-##### 6.13.3 — Backend: `CreateGraph` store function
-- [ ] `db.CreateGraph(ctx, pool, payload ImportPayload) (uuid.UUID, error)` — runs in a single transaction:
-  1. `INSERT INTO series (title, media_type, unit_label, total_units, author, group_type, custom_metadata) VALUES (...) RETURNING id` — server generates UUID
-  2. Batch-insert all `payload.Characters` using the server-assigned series UUID
-  3. Batch-insert all `payload.Relationships` (FK on characters)
-- [ ] Return the new series UUID to the caller
-- [ ] On any error, roll back the transaction
+##### 6.13.7 — Backend: Router + Store interface + CORS ✅
+- [x] `CreateGraph` / `ReplaceGraph` added to `api.Store` interface and `PGStore`
+- [x] Routes registered; `PATCH` added to CORS allowed methods; router test updated
 
-##### 6.13.4 — Backend: `ReplaceGraph` store function
-- [ ] `db.ReplaceGraph(ctx, pool, seriesID uuid.UUID, payload ImportPayload) error` — runs in a single transaction:
-  1. `UPDATE series SET title = ..., media_type = ..., ... WHERE id = $1`
-  2. `DELETE FROM characters WHERE series_id = $1` — cascades to `relationships` and `character_renames` via `ON DELETE CASCADE`
-  3. Batch-insert all `payload.Characters`
-  4. Batch-insert all `payload.Relationships`
-- [ ] Return error on any failure; roll back on error
-- [ ] Note: `blocks` and `series_colours` are untouched — they are populated by the LTG import pipeline, not the canvas editor
+##### 6.13.8 — Frontend: API client + helpers ✅
+- [x] `src/lib/importPayload.ts`: `ImportPayload` type, `isBackendId`, `graphSnapshotToImport` (UUID memo for LTG-identifier nodes), `applyIdRemap`
+- [x] `src/api/client.ts`: `mutate` helper, `createGraph`, `patchGraph`
 
-##### 6.13.5 — Backend: `POST /api/series` handler
-- [ ] Bind and validate `ImportPayload` from JSON body; return `400` on invalid payload
-- [ ] Call `store.CreateGraph(ctx, payload)`; return `500` on error
-- [ ] Return `201 Created` with `{ "id": "<uuid>" }`
-
-##### 6.13.6 — Backend: `PATCH /api/series/:id` handler
-- [ ] Parse `:id` as UUID; return `400` on invalid
-- [ ] Verify series exists (`store.GetSeriesByID`); return `404` if not found
-- [ ] Bind and validate `ImportPayload`; return `400` on invalid
-- [ ] Call `store.ReplaceGraph(ctx, id, payload)`; return `500` on error
-- [ ] Return `200 OK` with the updated `domain.Series` (re-fetch via `GetSeriesByID`)
-
-##### 6.13.7 — Backend: Router + Store interface + CORS
-- [ ] Add `CreateGraph` and `ReplaceGraph` to `api.Store` interface (`store.go`)
-- [ ] Add `PGStore` implementations delegating to the `db` package
-- [ ] Register routes in `router.go`:
-  ```
-  POST  /api/series
-  PATCH /api/series/:id
-  ```
-- [ ] Add `PATCH` to `corsMiddleware` allowed methods (already has it — confirm)
-
-##### 6.13.8 — Frontend: API client functions
-- [ ] `createGraph(payload: ImportPayload): Promise<Result<{ id: string }, ApiError>>` — `POST /api/series`
-- [ ] `patchGraph(id: string, payload: ImportPayload): Promise<Result<void, ApiError>>` — `PATCH /api/series/:id`
-- [ ] `ImportPayload` type in `src/api/client.ts` matching the backend shape (derived from `GraphSnapshot` — strip `atUnit`, use `series` subset, strip `seriesId` from characters/relationships)
-- [ ] Unit tests for both client functions
-
-##### 6.13.9 — Frontend: Wire save to backend
-- [ ] Helper `isBackendId(id: string): boolean` — returns true when the series id is a real UUID (not `edit:*` or `preview`)
-- [ ] `graphSnapshotToImport(graph: GraphSnapshot): ImportPayload` — mapping function in `src/lib/importPayload.ts`
-- [ ] Update `handleSaveGraph` in `App.tsx`:
-  - If `isBackendId(editGraph.series.id)`: call `patchGraph` in the background; show "Saved" on success, error toast on failure
-  - Else (new graph): call `createGraph`; on success, update `editGraph.series.id` (and `viewerGraph`, sessionStorage, localStorage) with the server-assigned UUID; show "Saved" toast; on failure, show error toast and keep editing (do not exit)
-- [ ] `handleSaveGraph` remains non-blocking for the user — the toast fires after the API call resolves
+##### 6.13.9 — Frontend: Wire save to backend ✅
+- [x] `handleSaveGraph` is now `async`: local save is immediate; POST/PATCH fires after
+- [x] On successful POST: `applyIdRemap` patches `editGraph` + storage with server UUID; all subsequent saves use PATCH
+- [x] Error toasts on network/server failure; success toast after backend confirms
 
 ##### 6.13.10 — Future: Auto-save via debounced PATCH
-- [ ] Once 6.13.9 is wired: add a `useEffect` that debounces `editGraph` changes (e.g. 5 s) and calls `patchGraph` silently when `isBackendId(editGraph.series.id)` is true
-- [ ] Show a subtle "Saving…" indicator in the toolbar while the PATCH is in-flight
-- [ ] On success: update `editBaseRef` so the "unsaved changes" dialog does not fire for auto-saved changes
+- [ ] Debounce 5 s on `editGraph` changes; silent PATCH when `isBackendId` is true
+- [ ] "Saving…" toolbar indicator; advance `editBaseRef` on success
 
 ---
 
@@ -576,10 +503,11 @@ compilable directly to the LitTree domain model.
 - [x] "Code Editor" button in edit toolbar emits from `editGraph` on every open (canvas → code on demand)
 - [x] Render button while in edit mode sets `editGraph` from compiled result (code → canvas)
 
-##### 6.14.1 — Live canvas → code sync
-- [ ] When the code editor panel is open and `editGraph` changes (any canvas edit), debounce 500 ms and re-emit LTG into the editor — replace the editor content with the updated source
-- [ ] Preserve cursor position and selection if the user is mid-edit (Monaco `setValue` with selection restore)
-- [ ] Show a subtle "↻ synced" flash in the editor gutter when content is auto-updated
+##### 6.14.1 — Live canvas → code sync ✅
+- [x] `syncContent` prop on `CodeEditorPanel` (separate from one-shot `externalContent`) — replaces document with cursor position preserved via `EditorSelection.single` clamped to new length
+- [x] Debounced 500 ms `useEffect` in `App.tsx` on `[editGraph, editMode, editorOpen]` — sets `editorSyncContent`
+- [x] `skipSyncUntilRef` suppresses the sync for 1 s after Render to avoid overwriting the user's source
+- [x] "↻ synced" flash in editor header for 1.5 s after each auto-update
 
 ##### 6.14.2 — Incremental AST diff (avoid full-replace rewrite)
 - [ ] Instead of emitting the full LTG string on every canvas change, compute an AST diff between the previous and new `LtgAst`

@@ -17,4 +17,6 @@ type Store interface {
 	GetGraphSnapshot(ctx context.Context, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error)
 	GetFullGraph(ctx context.Context, seriesID uuid.UUID) (domain.GraphSnapshot, error)
 	GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error)
+	CreateGraph(ctx context.Context, payload domain.ImportPayload) (uuid.UUID, error)
+	ReplaceGraph(ctx context.Context, seriesID uuid.UUID, payload domain.ImportPayload) error
 }

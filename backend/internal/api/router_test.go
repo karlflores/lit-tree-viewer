@@ -24,7 +24,7 @@ func TestCORSMiddleware_SetsHeaders(t *testing.T) {
 
 	tests := []struct{ header, want string }{
 		{"Access-Control-Allow-Origin", "http://localhost:5173"},
-		{"Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"},
+		{"Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS"},
 		{"Access-Control-Allow-Headers", "Content-Type, Authorization"},
 	}
 	for _, tt := range tests {

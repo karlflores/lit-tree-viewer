@@ -299,100 +299,20 @@ pre-refactor data (old flat `EditableGraph` shape) is automatically discarded.
 
 ---
 
-### 6.13 — Backend Persistence
+### 6.13 — Backend Persistence ✅
 
-> Persist canvas-authored graphs to the database. Triggered by the Save button.
-> First save: `POST /api/series` — backend assigns a stable UUID.
-> Subsequent saves: `PATCH /api/series/:id` — full replace in a transaction.
+**Key invariant:** `editGraph.series.id` starts as `edit:<uuid>`. After the first successful POST it becomes the server-assigned UUID; all subsequent saves call PATCH.
 
-#### Architecture
-
-```
-editGraph (GraphSnapshot, in-memory + sessionStorage)
-    │  Save button / auto-save
-    ▼
-graphSnapshotToImport(graph) → ImportPayload
-    │
-    ├─ isBackendId(series.id) = false  →  POST /api/series  →  { id }
-    │                                      ↓ update editGraph.series.id
-    └─ isBackendId(series.id) = true   →  PATCH /api/series/:id
-```
-
-**Key invariant:** The `series.id` in `editGraph` starts as `edit:<uuid>` (client-only).
-After the first successful `POST`, it is replaced with the server-assigned UUID.
-All subsequent `PATCH` calls use that stable UUID.
-
-#### Data flow for `ImportPayload`
-
-The frontend `GraphSnapshot` maps directly to `ImportPayload`:
-- `series` → drop `id` (server assigns), strip `totalUnits` lower-bound to 1
-- `characters` → drop `seriesId` (server fills from context), drop `ltgIdentifier`, `renames`, `description`, `imageUrl` are optional
-- `relationships` → drop `seriesId`
-
-`blocks` and `series_colours` are **not** written by the canvas editor — they are populated exclusively by the LTG import pipeline.
-
-#### 6.13.1 — Migration 007: `custom_metadata` on `series` ✅ (spec only — not yet applied)
-- [ ] `007_series_custom_metadata.up.sql`: `ALTER TABLE series ADD COLUMN custom_metadata JSONB DEFAULT NULL`
-- [ ] `007_series_custom_metadata.down.sql`: `ALTER TABLE series DROP COLUMN custom_metadata`
-- [ ] Update `domain.Series` with `CustomMetadata map[string]string`
-- [ ] Update `GetAllSeries`, `GetSeriesByID`, `GetCompiledGraph` to scan + include the new column
-
-#### 6.13.2 — Backend: `ImportPayload` domain type
-- [ ] `domain.ImportSeries` — `title, mediaType, unitLabel, totalUnits, author?, groupType?, customMetadata?`
-- [ ] `domain.ImportCharacter` — `id (UUID), name, aliases, description?, imageUrl?, introducedAt, diedAt?`
-- [ ] `domain.ImportRelationship` — `id (UUID), fromId, toId, kind?, label, directed, introducedAt, endedAt?`
-- [ ] `domain.ImportPayload` — `{ series, characters [], relationships [] }`
-- [ ] Validation: `totalUnits >= 1`, `mediaType ∈ {book,show,film}`, all `introducedAt >= 1`, relationship endpoints present in characters list
-
-#### 6.13.3 — Backend: `CreateGraph` store function
-- [ ] `db.CreateGraph(ctx, pool, payload) → (uuid.UUID, error)` — single transaction:
-  1. `INSERT INTO series (...) VALUES (...) RETURNING id` — server generates UUID
-  2. Batch `INSERT INTO characters` with the new series UUID
-  3. Batch `INSERT INTO relationships` after characters are committed
-- [ ] Roll back on any error; return new series UUID on success
-
-#### 6.13.4 — Backend: `ReplaceGraph` store function
-- [ ] `db.ReplaceGraph(ctx, pool, seriesID, payload) → error` — single transaction:
-  1. `UPDATE series SET ... WHERE id = $1`
-  2. `DELETE FROM characters WHERE series_id = $1` — cascades to `relationships` and `character_renames`
-  3. Batch `INSERT INTO characters`
-  4. Batch `INSERT INTO relationships`
-- [ ] `blocks` and `series_colours` are untouched
-
-#### 6.13.5 — Backend: `POST /api/series` handler
-- [ ] Bind + validate `ImportPayload`; return `400` on invalid
-- [ ] Call `store.CreateGraph`; return `500` on error
-- [ ] Return `201 Created` with `{ "id": "<uuid>" }`
-
-#### 6.13.6 — Backend: `PATCH /api/series/:id` handler
-- [ ] Parse `:id` UUID; `400` on invalid; `404` if series not found
-- [ ] Bind + validate `ImportPayload`; `400` on invalid
-- [ ] Call `store.ReplaceGraph`; `500` on error
-- [ ] Return `200 OK` with updated `domain.Series`
-
-#### 6.13.7 — Backend: Router + Store interface
-- [ ] Add `CreateGraph` and `ReplaceGraph` to `api.Store` interface
-- [ ] Register `POST /api/series` and `PATCH /api/series/:id` in `router.go`
-- [ ] Confirm `PATCH` is in `corsMiddleware` allowed methods
-
-#### 6.13.8 — Frontend: API client functions (`src/api/client.ts`)
-- [ ] `ImportPayload` TypeScript type (mirrors backend shape)
-- [ ] `graphSnapshotToImport(graph: GraphSnapshot): ImportPayload` in `src/lib/importPayload.ts`
-- [ ] `isBackendId(id: string): boolean` — true when id is a plain UUID (not `edit:*` or `"preview"`)
-- [ ] `createGraph(payload): Promise<Result<{ id: string }, ApiError>>` — `POST /api/series`
-- [ ] `patchGraph(id, payload): Promise<Result<void, ApiError>>` — `PATCH /api/series/:id`
-- [ ] Unit tests for `graphSnapshotToImport` and `isBackendId`
-
-#### 6.13.9 — Frontend: Wire save to backend
-- [ ] `handleSaveGraph` in `App.tsx`:
-  - If `isBackendId(id)`: call `patchGraph`; on success show "Saved" toast; on failure show error toast
-  - Else: call `createGraph`; on success update `editGraph.series.id` (+ `viewerGraph` + storage) with server UUID; on failure show error toast and remain in edit mode
-- [ ] Save is non-blocking — optimistic local save (sessionStorage + viewerGraph) happens immediately; API call is async
-
-#### 6.13.10 — Future: Auto-save via debounced PATCH
-- [ ] `useEffect` on `editGraph` — debounce 5 s, call `patchGraph` silently when `isBackendId` is true
-- [ ] Subtle "Saving…" state in toolbar during in-flight PATCH
-- [ ] On success: advance `editBaseRef` so the exit confirm dialog does not trigger for auto-saved state
+#### 6.13.1 ✅ Migration 007 — `custom_metadata JSONB` on `series`; `domain.Series.CustomMetadata map[string]string`; scan via `json.Unmarshal`; write via `::jsonb` cast
+#### 6.13.2 ✅ `ImportSeries`, `ImportCharacter`, `ImportRelationship`, `ImportPayload` in `domain/types.go`; `validateImportPayload` in `handlers.go`
+#### 6.13.3 ✅ `db.CreateGraph` — single transaction, server-assigned UUID, batch insert chars + rels
+#### 6.13.4 ✅ `db.ReplaceGraph` — single transaction, UPDATE series + DELETE chars (cascades) + batch insert
+#### 6.13.5 ✅ `POST /api/series` → `201 { id }`
+#### 6.13.6 ✅ `PATCH /api/series/:id` → `200 Series`; 404 guard; validation
+#### 6.13.7 ✅ Store interface + PGStore wrappers; routes registered; PATCH added to CORS; router test updated
+#### 6.13.8 ✅ `src/lib/importPayload.ts`: `ImportPayload`, `isBackendId`, `graphSnapshotToImport` (UUID memo), `applyIdRemap`; `mutate` helper + `createGraph` + `patchGraph` in `client.ts`
+#### 6.13.9 ✅ `handleSaveGraph` async: immediate local save + async POST/PATCH; `applyIdRemap` after POST to stabilise IDs
+#### 6.13.10 — Future: debounced auto-save, "Saving…" indicator
 
 ---
 
@@ -400,36 +320,39 @@ The frontend `GraphSnapshot` maps directly to `ImportPayload`:
 
 ### 6.14 — Bidirectional LTG Sync
 
-> The code editor and canvas stay in sync. Partial sync is already live; this phase
-> completes the loop with live two-way updates and structural round-tripping.
+> The code editor and the canvas stay in sync. Canvas → code (on demand and live) is
+> complete. Code → canvas (via Render) is complete. Remaining work: surgical diffs,
+> block label round-tripping, and the Edit Timeline visual tool.
 
-#### Foundation (already done) ✅
-- `compiledToFullSnapshot` — Render in edit mode converts `CompileSuccess` → full `GraphSnapshot` and sets it as `editGraph`; `editBaseRef` advances so the result is treated as clean
-- `snapshotToAst` / `graphSnapshotToLtg` — emit valid LTG from any `GraphSnapshot`; uses `ltgIdentifier` when present, derives slug from name for canvas-created nodes
-- "Code Editor" button in edit toolbar always re-emits from `editGraph` on click (canvas → code on demand, not just toggle)
-- `SideToolbar` stays visible when editor is open in edit mode (button remains accessible)
+#### 6.14.0 — Foundation ✅
+- [x] `compiledToFullSnapshot` in `ltgCompiler.ts` — Render in edit mode converts `CompileSuccess` → full unfiltered `GraphSnapshot`; sets it as `editGraph`; advances `editBaseRef` (treated as a clean save point)
+- [x] `snapshotToAst` / `graphSnapshotToLtg` in `ltgEmitter.ts` — emits valid LTG from any `GraphSnapshot`; uses `ltgIdentifier` when present, derives slug from character name for canvas-created nodes; handles unlinks, deceased, all metadata fields including custom tags
+- [x] "Code Editor" button in edit toolbar always re-emits from `editGraph` on every click (canvas → code on demand, not a simple toggle); `handleOpenCodeEditorFromEdit` in `App.tsx`
+- [x] `SideToolbar` stays visible when the editor panel is open in edit mode so the Code Editor button remains accessible
 
-#### 6.14.1 — Live canvas → code sync (auto-update)
-- [ ] When the code editor panel is open and `editGraph` changes (any canvas mutation), debounce 500 ms and push the new LTG source into the editor
-- [ ] Preserve cursor position and selection across auto-updates (Monaco `ITextModel.pushEditOperations` or `setValue` with selection restore)
-- [ ] Show a subtle "↻" indicator in the editor header when content was auto-updated
+#### 6.14.1 — Live canvas → code sync ✅
+- [x] `syncContent?: string | null` prop added to `CodeEditorPanel` (separate from one-shot `externalContent`) — replaces the document while preserving cursor position via `EditorSelection.single` clamped to the new document length; notifies LSP via `didChange`
+- [x] 500 ms debounced `useEffect` in `App.tsx` on `[editGraph, editMode, editorOpen]` — calls `graphSnapshotToLtg(editGraph)` and sets `editorSyncContent`
+- [x] `skipSyncUntilRef` set to `Date.now() + 1000` inside `handleCompileAndRender` — suppresses the sync for 1 s after a Render so the user's source is not immediately overwritten with a re-emission
+- [x] "↻ synced" text flashes in the editor header for 1.5 s after each auto-update
 
-#### 6.14.2 — Incremental AST diff (surgical edits)
-- [ ] Current: full LTG string replace on every canvas change — blows away user formatting and cursor
-- [ ] Compute `LtgAst` diff between previous and new states; map diffs to `ITextEdit[]`
-- [ ] This preserves comments, block labels, and any manually formatted lines the user has typed
+#### 6.14.2 — Incremental line diff (surgical edits) ✅
+- [x] `src/lib/ltgDiff.ts`: `computeLtgChanges(oldText, newText): ChangeSpec[]` — LCS-based line-level diff; `ChangeSpec[]` is CodeMirror's type (character-offset hunks) — compatible, not Monaco
+- [x] Edge cases handled: pure append (prepends `\n` when file doesn't end with newline), delete-at-end (includes the preceding `\n` separator), middle replacements, non-contiguous multi-hunk changes
+- [x] `CodeEditorPanel` `syncContent` effect now uses `computeLtgChanges(view.state.doc.toString(), syncContent)` — CodeMirror auto-adjusts cursor for unchanged regions; no explicit selection remapping needed
+- [x] 14 unit tests covering all edge cases in `src/__tests__/ltgDiff.test.ts`
 
-#### 6.14.3 — Block label and group structure round-trip
-- [ ] `snapshotToAst` currently emits unlabelled `new chapter:` blocks — labels and groups are lost after a canvas round-trip
-- [ ] Add `blockLabels: Record<number, string>` and `blockGroups: { label: string; range: [number, number] }[]` to `Series` or a parallel metadata type
-- [ ] Persist these through save/load so `snapshotToAst` can emit `new chapter: "The Storm"` style blocks
-- [ ] Wire the "Edit Timeline" button (6.14.4) to edit this structure
+#### 6.14.3 — Block label and group structure round-trip ✅
+- [x] `BlockGroup` type added to `domain.ts`; `Series` gains `blockLabels?: Record<number, string>` and `blockGroups?: readonly BlockGroup[]`
+- [x] `extractBlockMeta(rawBlocks)` helper in `ltgCompiler.ts` builds both fields from `CompileSuccess.blocks`; called from both `compiledToSnapshot` and `compiledToFullSnapshot`
+- [x] Persistence is automatic — both fields live inside `Series` inside `GraphSnapshot`, which is already serialised by `saveEditGraph`/`saveViewerGraph`
+- [x] `snapshotToAst` in `ltgEmitter.ts` now emits `new chapter: "The Storm"` and `group "Season 1":` when labels/groups are present; falls back to unlabelled blocks for canvas-created graphs
 
 #### 6.14.4 — Edit Timeline tool (block labels + arc grouping)
-- [ ] Wire "Edit Timeline" stub in the edit toolbar to a timeline editor overlay
-- [ ] Allow users to assign display labels to individual blocks
-- [ ] Allow users to group consecutive blocks into named arcs/volumes/seasons (`group "Season 1":`)
-- [ ] Persist structure in `editGraph` and round-trip through `snapshotToAst`
+- [ ] Wire the "Edit Timeline" stub button in the edit toolbar to a slide-in overlay (or inline timeline UI)
+- [ ] Allow the user to assign a display label to any individual block (e.g. "The Storm" for chapter 6)
+- [ ] Allow the user to define named arc / volume / season groups over consecutive block ranges
+- [ ] Persist the result in `editGraph` (via 6.14.3 metadata fields) and round-trip through `snapshotToAst`
 
 ---
 
