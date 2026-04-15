@@ -10,6 +10,11 @@ export type Series = Readonly<{
   mediaType: MediaType
   unitLabel: string
   totalUnits: number
+  // Optional metadata fields — sourced from LTG `metadata` / `set` directives
+  author?: string
+  groupType?: string
+  // Arbitrary key-value metadata tags (LTG: `metadata <key>: "<value>"`)
+  customMetadata?: Readonly<Record<string, string>>
 }>
 
 // ============================================================

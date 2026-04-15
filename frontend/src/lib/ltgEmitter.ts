@@ -5,12 +5,13 @@ import type { CompileSuccess } from './ltgLspClient'
 // ---------------------------------------------------------------------------
 
 type RawSeries = {
-  title:      string
-  mediaType:  'book' | 'show' | 'film'
-  unitLabel:  string
-  totalUnits: number
-  author:     string | null
-  groupType:  string | null
+  title:          string
+  mediaType:      'book' | 'show' | 'film'
+  unitLabel:      string
+  totalUnits:     number
+  author:         string | null
+  groupType:      string | null
+  customMetadata?: Record<string, string>
 }
 
 type RawRename = {
@@ -217,6 +218,11 @@ export function astToLtg(ast: LtgAst): string {
   lines.push(`metadata title:  "${ast.series.title}"`)
   lines.push(`metadata media:  ${ast.series.mediaType}`)
   if (ast.series.author) lines.push(`metadata author: "${ast.series.author}"`)
+  if (ast.series.customMetadata) {
+    for (const [key, value] of Object.entries(ast.series.customMetadata)) {
+      if (key.trim()) lines.push(`metadata ${key.trim()}: "${value}"`)
+    }
+  }
   lines.push('')
 
   // ── Structural directives ─────────────────────────────────────────────────

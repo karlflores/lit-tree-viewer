@@ -75,6 +75,8 @@ export function compiledToSnapshot(raw: CompileSuccess, atUnit: number): GraphSn
     mediaType:  rawSeries.mediaType,
     unitLabel:  rawSeries.unitLabel,
     totalUnits: rawSeries.totalUnits,
+    ...(rawSeries.author    ? { author:    rawSeries.author }    : {}),
+    ...(rawSeries.groupType ? { groupType: rawSeries.groupType } : {}),
   }
 
   const characters: Character[] = rawChars

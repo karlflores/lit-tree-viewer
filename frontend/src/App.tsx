@@ -20,6 +20,7 @@ import CharacterEditPanel from './components/CharacterEditPanel'
 import RelationshipEditPanel from './components/RelationshipEditPanel'
 import NodeContextMenu from './components/NodeContextMenu'
 import ConfirmDialog from './components/ConfirmDialog'
+import GraphMetadataPanel from './components/GraphMetadataPanel'
 import ToolbarButton from './components/ToolbarButton'
 import NotificationStack from './components/NotificationStack'
 import Toggle from './components/Toggle'
@@ -64,6 +65,8 @@ export default function App() {
   const [relPanelOpen, setRelPanelOpen]           = useState(false)
   const relCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const relOpenRafRef    = useRef<number | null>(null)
+
+  const [metadataPanelOpen, setMetadataPanelOpen] = useState(false)
 
   const [contextMenuNodeId, setContextMenuNodeId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos]       = useState<{ x: number; y: number } | null>(null)
@@ -165,6 +168,7 @@ export default function App() {
   }, [editorOpen, handleCloseEditor, handleOpenEditor])
 
   const handleSelectCharacter = useCallback((character: Character | null) => {
+    if (character) setMetadataPanelOpen(false)
     // Close the relationship panel when opening a character panel and vice versa.
     if (character && relOpenRafRef.current !== null) {
       cancelAnimationFrame(relOpenRafRef.current)
@@ -194,6 +198,7 @@ export default function App() {
   }, [])
 
   const handleSelectRelationship = useCallback((rel: Relationship | null) => {
+    if (rel) setMetadataPanelOpen(false)
     // Close the character panel when opening a relationship panel.
     if (rel && openRafRef.current !== null) {
       cancelAnimationFrame(openRafRef.current)
@@ -495,6 +500,20 @@ export default function App() {
     )) handleSelectRelationship(null)
   }, [contextMenuNodeId, editGraph, panelCharacter, panelRelationship, handleSelectCharacter, handleSelectRelationship])
 
+  const handleOpenMetadata = useCallback(() => {
+    // Close character/relationship panels so only one panel is visible at a time
+    handleSelectCharacter(null)
+    handleSelectRelationship(null)
+    setMetadataPanelOpen(true)
+  }, [handleSelectCharacter, handleSelectRelationship])
+
+  const handleUpdateSeriesMetadata = useCallback((updatedSeries: typeof series) => {
+    if (!editGraph) return
+    const next = { ...editGraph, series: updatedSeries }
+    setEditGraph(next)
+    saveEditGraph(next)
+  }, [editGraph])
+
   const handleUpdateCharacter = useCallback((character: Character) => {
     if (!editGraph) return
     const characters = editGraph.characters.map(c => c.id === character.id ? character : c)
@@ -656,6 +675,15 @@ export default function App() {
           )
         )}
 
+        {editMode && editGraph && (
+          <GraphMetadataPanel
+            series={editGraph.series}
+            isOpen={metadataPanelOpen}
+            onClose={() => setMetadataPanelOpen(false)}
+            onUpdate={handleUpdateSeriesMetadata}
+          />
+        )}
+
         {panelRelationship && (
           <RelationshipEditPanel
             relationship={panelRelationship}
@@ -689,6 +717,14 @@ export default function App() {
                   icon={<ExitEditIcon />}
                   label="Exit Edit Mode"
                   onClick={handleExitEdit}
+                />
+              </div>
+              <div className="pointer-events-auto">
+                <ToolbarButton
+                  icon={<MetadataIcon />}
+                  label="Edit Metadata"
+                  onClick={handleOpenMetadata}
+                  active={metadataPanelOpen}
                 />
               </div>
               <div className="pointer-events-auto">
@@ -891,6 +927,15 @@ function NewNodeIcon() {
       <circle cx="7.5" cy="7.5" r="3.5" stroke="currentColor" strokeWidth="1.4" />
       <path d="M7.5 2V1M7.5 14v-1M2 7.5H1M14 7.5h-1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M11 4.5h2.5M12.25 3.25v2.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function MetadataIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M7.5 5v1M7.5 7v3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   )
 }
