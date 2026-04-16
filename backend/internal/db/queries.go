@@ -59,7 +59,7 @@ var ErrNotFound = errors.New("not found")
 // GetAllSeries returns every series, ordered by title.
 func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata
+		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata, published
 		FROM series
 		ORDER BY title
 	`)
@@ -72,7 +72,7 @@ func GetAllSeries(ctx context.Context, pool *pgxpool.Pool) ([]domain.Series, err
 	for rows.Next() {
 		var s domain.Series
 		var rawMeta []byte
-		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta); err != nil {
+		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta, &s.Published); err != nil {
 			return nil, fmt.Errorf("scanning series row: %w", err)
 		}
 		scanSeriesWithMeta(rawMeta, &s)
@@ -86,10 +86,10 @@ func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domai
 	var s domain.Series
 	var rawMeta []byte
 	err := pool.QueryRow(ctx, `
-		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata
+		SELECT id, title, media_type, unit_label, total_units, author, group_type, custom_metadata, published
 		FROM series
 		WHERE id = $1
-	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta)
+	`, id).Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.GroupType, &rawMeta, &s.Published)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Series{}, ErrNotFound
@@ -99,6 +99,96 @@ func GetSeriesByID(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) (domai
 	}
 	scanSeriesWithMeta(rawMeta, &s)
 	return s, nil
+}
+
+// SearchSeries executes a filtered, sorted, paginated query against published series.
+// Sort column and direction are injected directly into the query string (validated
+// by the handler before reaching here — not user-controlled strings).
+func SearchSeries(ctx context.Context, pool *pgxpool.Pool, p domain.SearchParams) (domain.SearchResult, error) {
+	// Validate + normalise sort column to prevent injection.
+	sortCol := map[string]string{
+		"title":           "s.title",
+		"author":          "COALESCE(s.author, '')",
+		"media_type":      "s.media_type",
+		"total_units":     "s.total_units",
+		"character_count": "character_count",
+	}[p.SortBy]
+	if sortCol == "" {
+		sortCol = "s.title"
+	}
+	sortDir := "ASC"
+	if p.SortDir == "desc" {
+		sortDir = "DESC"
+	}
+
+	args := []any{}
+	idx := 1 // next $N placeholder
+
+	// Build WHERE clauses dynamically.
+	where := "WHERE s.published = true"
+
+	if p.Q != "" {
+		where += fmt.Sprintf(
+			" AND (s.title ILIKE $%d OR COALESCE(s.author, '') ILIKE $%d)",
+			idx, idx,
+		)
+		args = append(args, "%"+p.Q+"%")
+		idx++
+	}
+
+	if len(p.MediaTypes) > 0 {
+		where += fmt.Sprintf(" AND s.media_type = ANY($%d)", idx)
+		args = append(args, p.MediaTypes)
+		idx++
+	}
+
+	// Count query (no ORDER BY / LIMIT).
+	countSQL := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM series s
+		%s
+	`, where)
+
+	var total int
+	if err := pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return domain.SearchResult{}, fmt.Errorf("counting series: %w", err)
+	}
+	if total == 0 {
+		return domain.SearchResult{Results: []domain.SeriesSummary{}, Total: 0}, nil
+	}
+
+	// Data query with character_count aggregate.
+	dataSQL := fmt.Sprintf(`
+		SELECT s.id, s.title, s.media_type, s.unit_label, s.total_units, s.author, s.published,
+		       COUNT(c.id)::int AS character_count
+		FROM series s
+		LEFT JOIN characters c ON c.series_id = s.id
+		%s
+		GROUP BY s.id
+		ORDER BY %s %s, s.id ASC
+		LIMIT $%d OFFSET $%d
+	`, where, sortCol, sortDir, idx, idx+1)
+	args = append(args, p.Limit, p.Offset)
+
+	rows, err := pool.Query(ctx, dataSQL, args...)
+	if err != nil {
+		return domain.SearchResult{}, fmt.Errorf("searching series: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]domain.SeriesSummary, 0, p.Limit)
+	for rows.Next() {
+		var s domain.SeriesSummary
+		if err := rows.Scan(&s.ID, &s.Title, &s.MediaType, &s.UnitLabel, &s.TotalUnits, &s.Author, &s.Published, &s.CharacterCount); err != nil {
+			return domain.SearchResult{}, fmt.Errorf("scanning summary row: %w", err)
+		}
+		results = append(results, s)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.SearchResult{}, fmt.Errorf("iterating series rows: %w", err)
+	}
+
+	return domain.SearchResult{Results: results, Total: total}, nil
 }
 
 // customMetaJSON marshals a map to a JSON string for insertion into a JSONB column.

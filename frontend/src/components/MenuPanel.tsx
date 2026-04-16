@@ -1,11 +1,12 @@
 import { memo } from 'react'
 
 type Props = {
-  isOpen: boolean
-  onClose: () => void
+  isOpen:   boolean
+  onClose:  () => void
+  onBrowse: () => void
 }
 
-const MenuPanel = memo(({ isOpen, onClose }: Props) => {
+const MenuPanel = memo(({ isOpen, onClose, onBrowse }: Props) => {
   return (
     <aside
       className={[
@@ -26,6 +27,18 @@ const MenuPanel = memo(({ isOpen, onClose }: Props) => {
       </div>
 
       <div className="flex flex-col flex-1 overflow-y-auto">
+
+        {/* Discover */}
+        <section className="px-4 py-4 border-b border-border">
+          <p className="text-[10px] uppercase tracking-wider text-white/30 mb-3">Discover</p>
+          <button
+            onClick={() => { onBrowse(); onClose() }}
+            className="w-full text-left px-3 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/80 hover:text-white text-sm transition-colors"
+          >
+            Browse media
+            <span className="block text-[10px] text-white/40 mt-0.5">Search published graphs</span>
+          </button>
+        </section>
 
         {/* Import */}
         <section className="px-4 py-4 border-b border-border">

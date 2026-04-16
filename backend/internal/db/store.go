@@ -45,3 +45,7 @@ func (s *PGStore) CreateGraph(ctx context.Context, payload domain.ImportPayload)
 func (s *PGStore) ReplaceGraph(ctx context.Context, seriesID uuid.UUID, payload domain.ImportPayload) error {
 	return ReplaceGraph(ctx, s.pool, seriesID, payload)
 }
+
+func (s *PGStore) SearchSeries(ctx context.Context, params domain.SearchParams) (domain.SearchResult, error) {
+	return SearchSeries(ctx, s.pool, params)
+}

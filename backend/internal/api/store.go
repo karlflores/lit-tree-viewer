@@ -19,4 +19,5 @@ type Store interface {
 	GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error)
 	CreateGraph(ctx context.Context, payload domain.ImportPayload) (uuid.UUID, error)
 	ReplaceGraph(ctx context.Context, seriesID uuid.UUID, payload domain.ImportPayload) error
+	SearchSeries(ctx context.Context, params domain.SearchParams) (domain.SearchResult, error)
 }

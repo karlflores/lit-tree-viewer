@@ -483,9 +483,9 @@ compilable directly to the LitTree domain model.
 - [x] On successful POST: `applyIdRemap` patches `editGraph` + storage with server UUID; all subsequent saves use PATCH
 - [x] Error toasts on network/server failure; success toast after backend confirms
 
-##### 6.13.10 — Future: Auto-save via debounced PATCH
-- [ ] Debounce 5 s on `editGraph` changes; silent PATCH when `isBackendId` is true
-- [ ] "Saving…" toolbar indicator; advance `editBaseRef` on success
+##### 6.13.10 — Auto-save via debounced PATCH ✅
+- [x] Debounce 5 s on `editGraph` changes; silent PATCH when `isBackendId` is true
+- [x] "Saving…" toolbar indicator; advance `editBaseRef` on success
 
 ---
 
@@ -502,12 +502,20 @@ compilable directly to the LitTree domain model.
 - [x] `snapshotToAst` / `graphSnapshotToLtg` — emit valid LTG from any `GraphSnapshot`
 - [x] "Code Editor" button in edit toolbar emits from `editGraph` on every open (canvas → code on demand)
 - [x] Render button while in edit mode sets `editGraph` from compiled result (code → canvas)
+- [x] All edit-mode panels (CharacterEditPanel, RelationshipEditPanel, GraphMetadataPanel) close automatically when exiting edit mode
 
 ##### 6.14.1 — Live canvas → code sync ✅
 - [x] `syncContent` prop on `CodeEditorPanel` (separate from one-shot `externalContent`) — replaces document with cursor position preserved via `EditorSelection.single` clamped to new length
 - [x] Debounced 500 ms `useEffect` in `App.tsx` on `[editGraph, editMode, editorOpen]` — sets `editorSyncContent`
 - [x] `skipSyncUntilRef` suppresses the sync for 1 s after Render to avoid overwriting the user's source
 - [x] "↻ synced" flash in editor header for 1.5 s after each auto-update
+
+##### 6.14.1b — Auto-render on newline (code → canvas live sync) ✅
+- [x] Update listener in `CodeEditorPanel` detects newline insertion via `changes.iterChanges`
+- [x] Debounced 600 ms compile request fires after each newline (slightly after the 400 ms LSP `didChange` so the server has the latest doc)
+- [x] On clean compile: calls `onCompileAndRender` silently — no toast, no spinner; best-effort
+- [x] `connectedRef` / `onCompileAndRenderRef` / `autoRenderInProgressRef` prevent stale closures and concurrent requests
+- [x] `skipSyncUntilRef` in `App.tsx` already suppresses the canvas→code bounce-back for 1 s after render
 
 ##### 6.14.2 — Incremental AST diff (avoid full-replace rewrite)
 - [ ] Instead of emitting the full LTG string on every canvas change, compute an AST diff between the previous and new `LtgAst`
@@ -520,11 +528,13 @@ compilable directly to the LitTree domain model.
 - [ ] Persist these via the metadata panel ("Edit Timeline" button — 6.14.4) so they survive save/load
 - [ ] `snapshotToAst` emits block labels when present
 
-##### 6.14.4 — Edit Timeline tool (block labels + groups)
-- [ ] Wire the "Edit Timeline" stub button to a timeline editor overlay
-- [ ] Lets user assign display labels to individual blocks (e.g. "The Storm" for chapter 6)
-- [ ] Lets user group consecutive blocks into named arcs/volumes/seasons
-- [ ] Persisted in `editGraph` and round-tripped through `snapshotToAst`
+##### 6.14.4 — Edit Timeline tool (block labels + groups) ✅
+- [x] `EditTimelinePanel` component — same slide-in shell as other panels; mutual exclusion with character/relationship/metadata panels and on edit-mode exit
+- [x] Block labels section: list of all blocks 2–N with optional label inputs; block 1 shown as read-only "init (fixed)"; ● dot indicator on blocks that belong to a group
+- [x] Groups section: add/remove groups; each entry has a label input + from/to number selectors constrained to valid ranges; placeholder adapts to `series.groupType`
+- [x] `handleOpenTimeline` + `timelinePanelOpen` state in `App.tsx`; reuses `handleUpdateSeriesMetadata` for persistence
+- [x] "Edit Timeline" toolbar button wired; `active` highlight when panel is open
+- [x] Persisted in `editGraph.series.{blockLabels,blockGroups}` and round-tripped through `snapshotToAst` (already handled by 6.14.3)
 
 ---
 
@@ -538,6 +548,272 @@ compilable directly to the LitTree domain model.
 - [ ] Cache enriched data back to DB
 - [ ] Surface source label in character panel ("From Wikipedia", "AI generated")
 - [ ] User override: manual edit of description + image upload
+
+---
+
+### Phase 8 — Browse Media
+
+> A discoverable library of published graphs. Users can search by keyword, filter
+> by media type, and sort results. Requires a `published` concept on the series table
+> so only curator-approved graphs appear in the browse view.
+
+#### 8.1 — Backend: `published` flag + search endpoint ✅
+
+##### 8.1.1 — Migration: `published` column on `series` ✅
+- [x] `migration 008_browse_seed.up.sql` — `ALTER TABLE series ADD COLUMN published BOOLEAN NOT NULL DEFAULT false`; marks WH as published; seeds 5 new example graphs (Pride and Prejudice, The Count of Monte Cristo, Breaking Bad, Succession, The Godfather)
+- [x] `migration 008_browse_seed.down.sql` — removes example series, reverts WH, drops column
+- [x] `domain.Series.Published bool`; `domain.SeriesSummary`; `domain.SearchParams`; `domain.SearchResult`
+- [x] All series scan queries updated to include `published`
+
+##### 8.1.2 — Search endpoint ✅
+- [x] `GET /api/series/search?q=&mediaType=&sortBy=&sortDir=&limit=&offset=`
+- [x] ILIKE keyword search against `title` and `author`; comma-separated `mediaType` filter; dynamic sort column (validated server-side); `limit` capped at 50; only `published = true` graphs returned
+- [x] Response: `{ results: SeriesSummary[], total: int }` with `characterCount` via LEFT JOIN aggregate
+- [x] `SearchSeries` in `db/queries.go` with parameterised WHERE + injected (validated) ORDER BY
+
+##### 8.1.3 — Router + store wiring ✅
+- [x] `SearchSeries` on `Store` interface and `PGStore`
+- [x] Route registered: `GET /api/series/search` (original `GET /api/series` list endpoint preserved)
+
+#### 8.2 — Frontend: Browse panel ✅
+
+##### 8.2.1 — "Browse Media" option in MenuPanel ✅
+- [x] "Discover" section added to `MenuPanel`; "Browse media" button calls `onBrowse()` prop then closes
+
+##### 8.2.2 — `BrowsePanel` component ✅
+- [x] `src/components/BrowsePanel.tsx` — slide-in from left; same RAF mount/unmount pattern
+- [x] Sequence counter (`searchSeqRef`) prevents stale responses from overwriting newer results
+
+##### 8.2.3 — Search bar ✅
+- [x] 300 ms debounced input; clear (×) button when non-empty; loading skeleton (pulse animation)
+
+##### 8.2.4 — Filter + sort controls ✅
+- [x] "Filters" toggle reveals media type pills (Book / Show / Film, multi-select) with active count badge
+- [x] Sort-by dropdown + asc/desc toggle icon button
+
+##### 8.2.5 — Results list ✅
+- [x] `SeriesCard` — title, colour-coded media badge, author, chapter count, character count
+- [x] Empty state; result count header; "Load more" offset pagination
+- [x] Clicking a card fetches full graph, sets as `viewerGraph`, closes panel
+
+##### 8.2.6 — Wire into App.tsx ✅
+- [x] `selectedSeriesId` state (replaces hardcoded `SERIES_ID`) — all three hooks re-fetch on change
+- [x] `browseMounted` / `browseOpen` state + RAF helpers + cleanup
+- [x] `handleSelectBrowseSeries` — `fetchFullGraph(id)` → `setViewerGraph` + `setSelectedSeriesId` + `setCurrentUnit(1)`
+- [x] `SideToolbar` and `TimelineScrubber` hide when browse panel is open
+- [x] Browse panel closes on edit mode entry
+
+---
+
+### Phase 9 — Authentication & Sessions
+
+> Google SSO via OAuth 2.0 Authorization Code flow. Server-side sessions backed by
+> Redis — stateless JWT is deferred until multi-region is needed. Auth gates write
+> operations (save, notes) and eventually browse (Phase 9.3). Read-only viewing
+> remains public.
+
+#### 9.1 — Infrastructure
+
+##### 9.1.1 — User table migration
+- [ ] `CREATE TABLE users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), google_id TEXT UNIQUE NOT NULL, email TEXT NOT NULL, display_name TEXT NOT NULL, avatar_url TEXT, role TEXT NOT NULL DEFAULT 'user', created_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen_at TIMESTAMPTZ)`
+- [ ] Role enum values (enforced in Go, not as a PG enum for easier migration): `user`, `moderator`, `admin`
+
+##### 9.1.2 — Session store (Redis)
+- [ ] Add Redis to `compose.yaml` (service: `redis`, image: `redis:7-alpine`, port `6379`)
+- [ ] `SESSION_SECRET`, `REDIS_URL` added to backend config (`config.go`)
+- [ ] Session key: `session:<token>` → JSON-encoded `{ userID, role, expiresAt }`
+- [ ] TTL: 7 days; sliding expiry — refreshed on each authenticated request
+- [ ] Session token: 32-byte crypto-random, base64url-encoded; sent as `HttpOnly; Secure; SameSite=Lax` cookie named `ltree_session`
+
+##### 9.1.3 — Google OAuth credentials
+- [ ] `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` in config
+- [ ] Redirect URI: `<base_url>/auth/google/callback`
+
+#### 9.2 — Backend auth flow
+
+##### 9.2.1 — OAuth endpoints
+- [ ] `GET /auth/google` — redirect to Google's authorization URL with `openid email profile` scopes
+- [ ] `GET /auth/google/callback` — exchange code for token; fetch user info from `https://www.googleapis.com/oauth2/v3/userinfo`; upsert user row (`ON CONFLICT (google_id) DO UPDATE SET last_seen_at = now(), display_name = ...`); create session in Redis; set cookie; redirect to `/`
+
+##### 9.2.2 — Session middleware
+- [ ] `AuthMiddleware` — reads `ltree_session` cookie; looks up session in Redis; injects `*domain.User` into Gin context (`ctx.Set("user", user)`); slides TTL; returns `401` if missing/expired
+- [ ] `OptionalAuthMiddleware` — same but does not 401 on miss; injects `nil` user; used for public routes that optionally personalise
+
+##### 9.2.3 — Auth utility endpoints
+- [ ] `GET /api/me` → `200 { id, email, displayName, avatarUrl, role }` (requires auth)
+- [ ] `POST /auth/logout` → clears Redis session; clears cookie; `204`
+
+##### 9.2.4 — Protect write routes
+- [ ] `POST /api/series`, `PATCH /api/series/:id` — require `AuthMiddleware`; store `created_by = user.ID` on series (new nullable column, migration required)
+- [ ] Notes endpoints (Phase 10) require `AuthMiddleware`
+
+#### 9.3 — Frontend auth integration
+
+##### 9.3.1 — Auth state
+- [ ] `useAuth` hook — `GET /api/me` on mount; returns `{ user, loading, refetch }`
+- [ ] `user` is `null` when unauthenticated; `User` type: `{ id, email, displayName, avatarUrl, role }`
+- [ ] Auth state shared via React context (`AuthContext`)
+
+##### 9.3.2 — Header: user menu
+- [ ] When unauthenticated: "Sign in" button in header → redirects to `/auth/google`
+- [ ] When authenticated: avatar circle (initials fallback) in header; click opens a small dropdown — display name, email, "Sign out" button
+- [ ] Sign out: `POST /auth/logout`; clear local auth state; no page reload needed
+
+##### 9.3.3 — Gate write operations
+- [ ] Save button in edit mode: if unauthenticated, show "Sign in to save" prompt instead of saving
+- [ ] New graph button: works offline (canvas-only); saving to backend requires auth
+- [ ] Browse Media (Phase 8): public read; no auth required to browse
+
+##### 9.3.4 — Session persistence
+- [ ] Cookie is `HttpOnly` (not readable by JS); auth state determined purely via `/api/me` response
+- [ ] On `401` from any API call, dispatch a global "session expired" toast and clear auth state
+
+---
+
+### Phase 10 — Notes System
+
+> Per-user, per-character notes attached to a specific chapter. Notes are private —
+> visible only to the user who wrote them, never to other users. The key UX is a
+> character notes timeline: all notes for a character sorted chronologically by
+> chapter, giving the reader a personal annotation history.
+
+#### 10.1 — Data model
+
+##### 10.1.1 — `notes` table migration
+- [ ] ```sql
+      CREATE TABLE notes (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        series_id    UUID NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+        character_id UUID NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        chapter      INT  NOT NULL,
+        content      TEXT NOT NULL,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+      ```
+- [ ] Index: `(user_id, series_id)` — supports fetching all notes for a user+series in one query
+- [ ] Index: `(user_id, character_id)` — supports per-character timeline query
+
+##### 10.1.2 — Domain types (Go)
+- [ ] `domain.Note { ID, UserID, SeriesID, CharacterID, Chapter, Content, CreatedAt, UpdatedAt }`
+
+#### 10.2 — Backend
+
+##### 10.2.1 — Store functions
+- [ ] `GetNotesForSeries(userID, seriesID) ([]Note, error)` — all notes for a user+series, ordered by `character_id, chapter`
+- [ ] `GetNotesForCharacter(userID, characterID) ([]Note, error)` — all notes for a specific character, ordered by `chapter`
+- [ ] `UpsertNote(userID, seriesID, characterID, chapter, content) (Note, error)` — insert or update (unique on `user_id, character_id, chapter`)
+- [ ] `DeleteNote(userID, noteID) error` — only deletes if `user_id` matches (ownership guard)
+
+##### 10.2.2 — API endpoints (all require `AuthMiddleware`)
+- [ ] `GET  /api/series/:id/notes` → `[]Note` (all notes for current user on this series)
+- [ ] `PUT  /api/series/:id/characters/:charId/notes/:chapter` → upsert; body `{ content: string }`; `201` on create, `200` on update
+- [ ] `DELETE /api/notes/:noteId` → `204`; 403 if note belongs to different user
+
+#### 10.3 — Frontend
+
+##### 10.3.1 — Note data fetching
+- [ ] `useNotes(seriesId)` hook — `GET /api/series/:id/notes`; only fetches when user is authenticated; `staleTime: 0` (always fresh)
+- [ ] `notesMap` derived: `Map<characterId, Map<chapter, Note>>` — O(1) lookup in render
+
+##### 10.3.2 — Note indicator on character nodes
+- [ ] `CharacterNode` receives `hasNote: boolean` prop (injected via `animatedNodes` in `GraphCanvas`)
+- [ ] When `hasNote` is true: small filled circle badge on the node (top-right corner), colour-coded to the note colour
+
+##### 10.3.3 — Notes in CharacterPanel (viewer mode)
+- [ ] New "Notes" section at the bottom of `CharacterPanel`
+- [ ] If unauthenticated: "Sign in to add notes" prompt
+- [ ] If authenticated: textarea for note at the current chapter; auto-saves on blur (debounced 500 ms)
+- [ ] Existing note pre-fills the textarea; empty save deletes the note
+
+##### 10.3.4 — Character notes timeline
+- [ ] "View all notes" link/button in the Notes section of `CharacterPanel`
+- [ ] Opens a `CharacterNotesPanel` — slide-in panel showing all notes for that character sorted by chapter ascending
+- [ ] Each entry: chapter label + chapter number, note content, edit/delete actions
+- [ ] Empty state: "No notes for this character yet"
+
+##### 10.3.5 — Notes require auth gate
+- [ ] All note mutations guarded: if `user` is null, show inline "Sign in to save notes" rather than firing the API
+
+---
+
+### Phase 11 — Admin UI & Role-Based Access Control
+
+> Operators need to manage users and control which graphs are visible to the public.
+> A three-tier role system (User → Moderator → Admin) gates access to management
+> and publishing workflows. The admin UI is a separate frontend route, not embedded
+> in the main viewer.
+
+#### 11.1 — Role system (backend)
+
+##### 11.1.1 — Role middleware
+- [ ] `RequireRole(roles ...string)` Gin middleware — reads `user` from context (set by `AuthMiddleware`); returns `403` if `user.Role` not in `roles`
+- [ ] Usage: `RequireRole("moderator", "admin")` for mod routes; `RequireRole("admin")` for admin-only routes
+
+##### 11.1.2 — Role assignment endpoint (admin only)
+- [ ] `PATCH /admin/users/:id` → body `{ role: "user" | "moderator" | "admin" }`; `RequireRole("admin")`
+- [ ] Also supports `{ banned: true }` — sets a `banned_at TIMESTAMPTZ` column; `AuthMiddleware` rejects banned sessions with `403`
+
+##### 11.1.3 — `banned_at` column migration
+- [ ] `ALTER TABLE users ADD COLUMN banned_at TIMESTAMPTZ`
+- [ ] `AuthMiddleware` checks `banned_at IS NOT NULL` after session lookup; returns `403 { error: "account_banned" }`
+
+#### 11.2 — Graph publishing workflow
+
+##### 11.2.1 — Moderator review queue
+- [ ] `GET /mod/series?published=false` → lists unpublished graphs; `RequireRole("moderator", "admin")`
+- [ ] `PATCH /mod/series/:id` → body `{ published: true | false }`; `RequireRole("moderator", "admin")`
+- [ ] Audit column: `published_by UUID REFERENCES users(id)`, `published_at TIMESTAMPTZ` (migration required)
+
+##### 11.2.2 — Submit for review (authenticated user)
+- [ ] `POST /api/series/:id/submit` → sets a `submitted_at TIMESTAMPTZ` column (migration); `200` or `409` if already submitted
+- [ ] Submitted graphs appear in the moderator queue; unpublished + not submitted = private draft
+
+#### 11.3 — Admin API
+
+##### 11.3.1 — User management endpoints (admin only)
+- [ ] `GET  /admin/users?q=&role=&banned=&limit=&offset=` → paginated user list; `RequireRole("admin")`
+- [ ] `GET  /admin/users/:id` → single user with all their series
+- [ ] `PATCH /admin/users/:id` → role, banned_at (see 11.1.2)
+- [ ] `DELETE /admin/users/:id` → hard delete (cascades to series, notes); confirm required
+
+##### 11.3.2 — Graph management endpoints (admin only)
+- [ ] `GET  /admin/series?q=&published=&userId=&limit=&offset=` → all graphs, unfiltered by published status
+- [ ] `PATCH /admin/series/:id` → `{ published, submitted_at: null }` (can reset submission)
+- [ ] `DELETE /admin/series/:id` → hard delete
+
+#### 11.4 — Admin frontend (`/admin` route)
+
+##### 11.4.1 — Route structure
+- [ ] `/admin` redirect → `/admin/users`
+- [ ] `/admin/users` — user management table
+- [ ] `/admin/graphs` — graph management table
+- [ ] `/mod/review` — moderator review queue
+- [ ] All admin routes: redirect to `/` if `user.role` is not `admin` / `moderator` as appropriate
+
+##### 11.4.2 — User management table (`/admin/users`)
+- [ ] Columns: avatar, display name, email, role (editable dropdown), banned status, created date, last seen, action buttons
+- [ ] Search bar: filters by name/email
+- [ ] Role filter: User / Moderator / Admin / All
+- [ ] Banned filter: Show all / Active only / Banned only
+- [ ] Inline role change: dropdown triggers `PATCH /admin/users/:id`; optimistic update
+- [ ] Ban/unban toggle button; two-click confirmation for destructive actions
+- [ ] Delete user: two-click confirmation; shows count of graphs that will be deleted
+
+##### 11.4.3 — Graph management table (`/admin/graphs`)
+- [ ] Columns: title, author, media type, chapters, characters, owner email, published status, submitted date, action buttons
+- [ ] Search bar + media type filter + published status filter
+- [ ] Publish/unpublish toggle: `PATCH /admin/series/:id`; optimistic update
+- [ ] Delete graph: two-click confirmation
+- [ ] Click row → opens graph in viewer (new tab or inline)
+
+##### 11.4.4 — Moderator review queue (`/mod/review`)
+- [ ] Lists submitted, unpublished graphs oldest-first
+- [ ] Each card: title, author, media type, character count, submission date, "Preview" link
+- [ ] **Approve** button → `PATCH /mod/series/:id { published: true }`
+- [ ] **Reject** button → `PATCH /mod/series/:id { submitted_at: null }` (returns to draft); optional rejection note (future)
+- [ ] Empty state: "No graphs awaiting review"
 
 ---
 

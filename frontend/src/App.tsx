@@ -10,12 +10,13 @@ import { emitLtg, graphSnapshotToLtg } from './lib/ltgEmitter'
 import { editableToSnapshot } from './lib/editableToSnapshot'
 import { createEmptyGraph, saveEditGraph, loadEditGraph, saveViewerGraph, loadViewerGraph } from './lib/editGraphSession'
 import { graphSnapshotToImport, applyIdRemap, isBackendId } from './lib/importPayload'
-import { createGraph, patchGraph } from './api/client'
+import { createGraph, patchGraph, fetchFullGraph } from './api/client'
 import { useNotificationStore } from './lib/notificationStore'
 import GraphCanvas from './components/GraphCanvas'
 import TimelineScrubber from './components/TimelineScrubber'
 import CharacterPanel from './components/CharacterPanel'
 import MenuPanel from './components/MenuPanel'
+import BrowsePanel from './components/BrowsePanel'
 import CodeEditorPanel from './components/CodeEditorPanel'
 import SideToolbar from './components/SideToolbar'
 import CharacterEditPanel from './components/CharacterEditPanel'
@@ -23,14 +24,16 @@ import RelationshipEditPanel from './components/RelationshipEditPanel'
 import NodeContextMenu from './components/NodeContextMenu'
 import ConfirmDialog from './components/ConfirmDialog'
 import GraphMetadataPanel from './components/GraphMetadataPanel'
+import EditTimelinePanel from './components/EditTimelinePanel'
 import ToolbarButton from './components/ToolbarButton'
 import NotificationStack from './components/NotificationStack'
 import Toggle from './components/Toggle'
 
-const SERIES_ID = '00000000-0000-0000-0000-000000000001'
+const DEFAULT_SERIES_ID = '00000000-0000-0000-0000-000000000001'
 const PANEL_CLOSE_MS = 250
 
 export default function App() {
+  const [selectedSeriesId, setSelectedSeriesId] = useState(DEFAULT_SERIES_ID)
   const [currentUnit, setCurrentUnit] = useState(1)
   const [showDeceased, setShowDeceased] = useState(true)
   const [editMode, setEditMode] = useState(false)
@@ -41,6 +44,8 @@ export default function App() {
   // Used for dirty checking — any reference inequality means unsaved changes.
   const editBaseRef = useRef<GraphSnapshot | null>(null)
   const [showExitConfirm, setShowExitConfirm] = useState(false)
+  const [autoSaving, setAutoSaving] = useState(false)
+  const autoSaveDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const addToast = useNotificationStore(s => s.addToast)
 
@@ -55,6 +60,35 @@ export default function App() {
     }
   }, [])
 
+  // Auto-save: debounced silent PATCH 5 s after any editGraph change, but only
+  // once the graph has a backend UUID (i.e. has been manually saved at least once).
+  // Advances editBaseRef on success so the dirty-check exit dialog stays quiet.
+  useEffect(() => {
+    if (!editGraph || !isBackendId(editGraph.series.id)) return
+    if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current)
+    const snapshot = editGraph   // capture for the async callback
+    autoSaveDebounceRef.current = setTimeout(async () => {
+      autoSaveDebounceRef.current = null
+      if (snapshot === editBaseRef.current) return   // nothing changed since last save
+      setAutoSaving(true)
+      try {
+        const { payload } = graphSnapshotToImport(snapshot)
+        const result = await patchGraph(snapshot.series.id, payload)
+        if (result.isOk()) {
+          editBaseRef.current = snapshot
+          saveViewerGraph(snapshot)
+          setViewerGraph(snapshot)
+        }
+        // On failure: silently ignore — manual Save is still available
+      } finally {
+        setAutoSaving(false)
+      }
+    }, 5000)
+    return () => {
+      if (autoSaveDebounceRef.current) clearTimeout(autoSaveDebounceRef.current)
+    }
+  }, [editGraph])
+
   // panelCharacter: the character currently rendered in the panel (stays non-null
   // during the close animation so the panel has something to display while sliding out).
   // panelOpen: drives the CSS translate transition — false triggers the slide-out.
@@ -68,7 +102,8 @@ export default function App() {
   const relCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const relOpenRafRef    = useRef<number | null>(null)
 
-  const [metadataPanelOpen, setMetadataPanelOpen] = useState(false)
+  const [metadataPanelOpen, setMetadataPanelOpen]   = useState(false)
+  const [timelinePanelOpen, setTimelinePanelOpen]   = useState(false)
 
   const [contextMenuNodeId, setContextMenuNodeId] = useState<string | null>(null)
   const [contextMenuPos, setContextMenuPos]       = useState<{ x: number; y: number } | null>(null)
@@ -77,6 +112,11 @@ export default function App() {
   const [menuOpen, setMenuOpen]       = useState(false)
   const menuCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const menuOpenRafRef    = useRef<number | null>(null)
+
+  const [browseMounted, setBrowseMounted] = useState(false)
+  const [browseOpen, setBrowseOpen]       = useState(false)
+  const browseCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const browseOpenRafRef    = useRef<number | null>(null)
 
   const [editorMounted, setEditorMounted] = useState(false)
   const [editorOpen, setEditorOpen]       = useState(false)
@@ -94,6 +134,9 @@ export default function App() {
       if (menuOpenRafRef.current !== null)     cancelAnimationFrame(menuOpenRafRef.current)
       if (editorCloseTimerRef.current)        clearTimeout(editorCloseTimerRef.current)
       if (editorOpenRafRef.current !== null)   cancelAnimationFrame(editorOpenRafRef.current)
+      if (browseCloseTimerRef.current)        clearTimeout(browseCloseTimerRef.current)
+      if (browseOpenRafRef.current !== null)   cancelAnimationFrame(browseOpenRafRef.current)
+      if (autoSaveDebounceRef.current)        clearTimeout(autoSaveDebounceRef.current)
     }
   }, [])
 
@@ -130,6 +173,42 @@ export default function App() {
       setMenuOpen(true)
     }
   }, [menuMounted, menuOpen])
+
+  const handleCloseBrowse = useCallback(() => {
+    if (browseOpenRafRef.current !== null) {
+      cancelAnimationFrame(browseOpenRafRef.current)
+      browseOpenRafRef.current = null
+    }
+    setBrowseOpen(false)
+    browseCloseTimerRef.current = setTimeout(() => setBrowseMounted(false), PANEL_CLOSE_MS)
+  }, [])
+
+  const handleOpenBrowse = useCallback(() => {
+    handleCloseMenu()
+    if (browseCloseTimerRef.current) clearTimeout(browseCloseTimerRef.current)
+    if (!browseMounted) {
+      setBrowseMounted(true)
+      browseOpenRafRef.current = requestAnimationFrame(() => {
+        browseOpenRafRef.current = null
+        setBrowseOpen(true)
+      })
+    } else {
+      setBrowseOpen(true)
+    }
+  }, [browseMounted, handleCloseMenu])
+
+  const handleSelectBrowseSeries = useCallback(async (id: string) => {
+    // Fetch the full graph for the selected series and load it as the viewer graph.
+    const result = await fetchFullGraph(id)
+    if (result.isErr()) {
+      addToast({ kind: 'error', title: 'Failed to load series' })
+      return
+    }
+    setSelectedSeriesId(id)
+    setCurrentUnit(1)
+    setViewerGraph(result.value)
+    saveViewerGraph(result.value)
+  }, [addToast])
 
   const handleCloseEditor = useCallback(() => {
     if (editorOpenRafRef.current !== null) {
@@ -170,7 +249,7 @@ export default function App() {
   }, [editorOpen, handleCloseEditor, handleOpenEditor])
 
   const handleSelectCharacter = useCallback((character: Character | null) => {
-    if (character) setMetadataPanelOpen(false)
+    if (character) { setMetadataPanelOpen(false); setTimelinePanelOpen(false) }
     // Close the relationship panel when opening a character panel and vice versa.
     if (character && relOpenRafRef.current !== null) {
       cancelAnimationFrame(relOpenRafRef.current)
@@ -200,7 +279,7 @@ export default function App() {
   }, [])
 
   const handleSelectRelationship = useCallback((rel: Relationship | null) => {
-    if (rel) setMetadataPanelOpen(false)
+    if (rel) { setMetadataPanelOpen(false); setTimelinePanelOpen(false) }
     // Close the character panel when opening a relationship panel.
     if (rel && openRafRef.current !== null) {
       cancelAnimationFrame(openRafRef.current)
@@ -229,16 +308,16 @@ export default function App() {
     }
   }, [])
 
-  const graphData      = useGraphData(SERIES_ID, currentUnit)
+  const graphData      = useGraphData(selectedSeriesId, currentUnit)
 
   // Full graph (all characters, all relationships, no temporal filter) — fetched
   // once and cached indefinitely. Replaces the second per-chapter fetch previously
   // used for layout and edit-mode entry.
-  const fullGraphData  = useFullGraph(SERIES_ID)
+  const fullGraphData  = useFullGraph(selectedSeriesId)
 
   // Compiled graph (identifier-resolved, block-structured) — fetched once so
   // "Open in Editor" is instant rather than waiting on a click-time request.
-  const compiledGraphData = useCompiledGraph(SERIES_ID)
+  const compiledGraphData = useCompiledGraph(selectedSeriesId)
 
   // Local graph set by the editor's "Render" button — overrides the fetched snapshot.
   const [localGraph, setLocalGraph] = useState<CompileSuccess | null>(null)
@@ -263,14 +342,19 @@ export default function App() {
   }, [editGraph, editMode, editorOpen])
 
   const handleOpenInEditor = useCallback(() => {
-    // Prefer a locally compiled graph (from the editor's Render button); fall
-    // back to the eagerly-prefetched compiled graph from the backend.
+    // Priority: user's canvas graph (viewerGraph) → last render (localGraph)
+    // → backend compiled graph. viewerGraph must come first or the user would
+    // see the backend's seed data instead of their own work.
+    if (viewerGraph) {
+      setEditorContent(graphSnapshotToLtg(viewerGraph))
+      handleOpenEditor()
+      return
+    }
     const compiled = localGraph ?? (compiledGraphData.status === 'success' ? compiledGraphData.graph : null)
     if (!compiled) return
-    const ltg = emitLtg(compiled)
-    setEditorContent(ltg)
+    setEditorContent(emitLtg(compiled))
     handleOpenEditor()
-  }, [localGraph, compiledGraphData, handleOpenEditor])
+  }, [viewerGraph, localGraph, compiledGraphData, handleOpenEditor])
 
   // Opens the code editor from edit mode, emitting the current canvas state as LTG.
   // Always re-loads content so the user sees the latest canvas changes.
@@ -331,14 +415,21 @@ export default function App() {
     const total = (graph.series as { totalUnits: number }).totalUnits
     setCurrentUnit(prev => Math.min(prev, total))
 
+    const full = compiledToFullSnapshot(graph)
+
     if (editMode) {
-      const full = compiledToFullSnapshot(graph)
       setEditGraph(full)
       editBaseRef.current = full
       saveEditGraph(full)
       saveViewerGraph(full)
       setViewerGraph(full)
       skipSyncUntilRef.current = Date.now() + 1000
+    } else {
+      // In viewer mode: update viewerGraph so the canvas reflects the rendered
+      // code. viewerSnapshot sits above localSnapshot in the display stack, so
+      // without this the canvas never updates after a Render.
+      setViewerGraph(full)
+      saveViewerGraph(full)
     }
   }, [editMode])
 
@@ -390,6 +481,12 @@ export default function App() {
   const handleSaveGraph = useCallback(async () => {
     if (!editGraph) return
 
+    // Cancel any pending auto-save — this manual save supersedes it.
+    if (autoSaveDebounceRef.current) {
+      clearTimeout(autoSaveDebounceRef.current)
+      autoSaveDebounceRef.current = null
+    }
+
     // Immediate local save — gives instant feedback regardless of network.
     saveEditGraph(editGraph)
     saveViewerGraph(editGraph)
@@ -428,7 +525,12 @@ export default function App() {
     setEditMode(false)
     editBaseRef.current = null
     setShowExitConfirm(false)
-  }, [])
+    // Close all edit-mode panels when returning to visual mode.
+    handleSelectCharacter(null)
+    handleSelectRelationship(null)
+    setMetadataPanelOpen(false)
+    setTimelinePanelOpen(false)
+  }, [handleSelectCharacter, handleSelectRelationship])
 
   // handleExitEdit: user-facing exit — shows confirm dialog if there are unsaved changes.
   const handleExitEdit = useCallback(() => {
@@ -566,10 +668,17 @@ export default function App() {
   }, [contextMenuNodeId, editGraph, panelCharacter, panelRelationship, handleSelectCharacter, handleSelectRelationship])
 
   const handleOpenMetadata = useCallback(() => {
-    // Close character/relationship panels so only one panel is visible at a time
     handleSelectCharacter(null)
     handleSelectRelationship(null)
+    setTimelinePanelOpen(false)
     setMetadataPanelOpen(true)
+  }, [handleSelectCharacter, handleSelectRelationship])
+
+  const handleOpenTimeline = useCallback(() => {
+    handleSelectCharacter(null)
+    handleSelectRelationship(null)
+    setMetadataPanelOpen(false)
+    setTimelinePanelOpen(true)
   }, [handleSelectCharacter, handleSelectRelationship])
 
   const handleUpdateSeriesMetadata = useCallback((updatedSeries: typeof series) => {
@@ -589,15 +698,18 @@ export default function App() {
     setPanelCharacter(character)
   }, [editGraph])
 
-  // Toggle edit mode: entering uses the full graph (all characters + all
-  // relationships, no temporal filtering) as the edit base so no ended
-  // relationships are silently dropped. Exiting clears editable state and
-  // falls back to the viewer snapshot.
+  // Toggle edit mode: entering uses the user's current graph as the edit base.
+  // Priority: viewerGraph (user's own canvas/rendered work) → fullGraphData
+  // (backend full graph, unfiltered) → layoutSnapshot (best available).
+  // viewerGraph must come first — fullGraphData is the backend seed series and
+  // would silently clobber the user's canvas graph if checked first.
   const handleToggleEditMode = useCallback(() => {
     if (editMode) {
       handleExitEdit()
     } else {
+      handleCloseBrowse()
       const base =
+        viewerGraph ??
         (fullGraphData.status === 'success' ? fullGraphData.snapshot : null) ??
         layoutSnapshot
       if (!base) return
@@ -606,7 +718,7 @@ export default function App() {
       editBaseRef.current = base   // mark clean on entry
       setEditMode(true)
     }
-  }, [editMode, handleExitEdit, fullGraphData, layoutSnapshot])
+  }, [editMode, handleExitEdit, handleCloseBrowse, viewerGraph, fullGraphData, layoutSnapshot])
 
   // 6.4 — inline title editing
   const titleInputRef      = useRef<HTMLInputElement>(null)
@@ -749,6 +861,15 @@ export default function App() {
           />
         )}
 
+        {editMode && editGraph && (
+          <EditTimelinePanel
+            series={editGraph.series}
+            isOpen={timelinePanelOpen}
+            onClose={() => setTimelinePanelOpen(false)}
+            onUpdate={handleUpdateSeriesMetadata}
+          />
+        )}
+
         {panelRelationship && (
           <RelationshipEditPanel
             relationship={panelRelationship}
@@ -764,10 +885,19 @@ export default function App() {
           <MenuPanel
             isOpen={menuOpen}
             onClose={handleCloseMenu}
+            onBrowse={handleOpenBrowse}
           />
         )}
 
-        <SideToolbar hidden={menuOpen || (editorOpen && !editMode)}>
+        {browseMounted && (
+          <BrowsePanel
+            isOpen={browseOpen}
+            onClose={handleCloseBrowse}
+            onSelectSeries={handleSelectBrowseSeries}
+          />
+        )}
+
+        <SideToolbar hidden={menuOpen || browseOpen || (editorOpen && !editMode)}>
           {editMode ? (
             <>
               <div className="pointer-events-auto">
@@ -777,6 +907,11 @@ export default function App() {
                   onClick={handleSaveGraph}
                 />
               </div>
+              {autoSaving && (
+                <div className="flex items-center justify-center px-2 py-1">
+                  <span className="text-[10px] text-white/40 select-none tracking-wide">Saving…</span>
+                </div>
+              )}
               <div className="pointer-events-auto">
                 <ToolbarButton
                   icon={<ExitEditIcon />}
@@ -825,7 +960,8 @@ export default function App() {
                 <ToolbarButton
                   icon={<EditTimelineIcon />}
                   label="Edit Timeline"
-                  onClick={() => addToast({ kind: 'info', title: 'Edit Timeline — coming soon' })}
+                  onClick={handleOpenTimeline}
+                  active={timelinePanelOpen}
                 />
               </div>
             </>
@@ -909,7 +1045,7 @@ export default function App() {
         <div
           className={[
             'absolute bottom-4 left-3 right-3 z-10 transition-opacity duration-[250ms]',
-            (panelOpen || menuOpen || editorOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
+            (panelOpen || menuOpen || browseOpen || editorOpen) ? 'opacity-0 pointer-events-none' : 'opacity-100',
           ].join(' ')}
         >
           <TimelineScrubber

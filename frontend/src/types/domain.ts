@@ -28,6 +28,24 @@ export type Series = Readonly<{
   blockLabels?: Readonly<Record<number, string>>
   // Ordered group containers, e.g. [{ label: "Volume I", range: [2, 8] }]
   blockGroups?: readonly BlockGroup[]
+  published?: boolean
+}>
+
+// Lightweight summary returned by GET /api/series/search
+export type SeriesSummary = Readonly<{
+  id: string
+  title: string
+  mediaType: MediaType
+  unitLabel: string
+  totalUnits: number
+  author?: string
+  published: boolean
+  characterCount: number
+}>
+
+export type SearchResult = Readonly<{
+  results: readonly SeriesSummary[]
+  total: number
 }>
 
 // ============================================================

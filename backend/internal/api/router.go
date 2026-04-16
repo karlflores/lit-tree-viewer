@@ -12,6 +12,7 @@ func NewRouter(store Store) *gin.Engine {
 	v1 := r.Group("/api")
 	{
 		v1.GET("/series", listSeries(store))
+		v1.GET("/series/search", searchSeries(store))
 		v1.POST("/series", createSeries(store))
 		v1.GET("/series/:id", getSeries(store))
 		v1.PATCH("/series/:id", patchSeries(store))

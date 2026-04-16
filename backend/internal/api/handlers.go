@@ -26,6 +26,62 @@ func listSeries(store Store) gin.HandlerFunc {
 	}
 }
 
+// searchSeries handles GET /series/search
+// Accepts: q, mediaType (comma-separated), sortBy, sortDir, limit, offset.
+func searchSeries(store Store) gin.HandlerFunc {
+	validSortBy := map[string]bool{
+		"title": true, "author": true, "media_type": true,
+		"total_units": true, "character_count": true,
+	}
+	return func(c *gin.Context) {
+		q := strings.TrimSpace(c.Query("q"))
+
+		var mediaTypes []string
+		if raw := strings.TrimSpace(c.Query("mediaType")); raw != "" {
+			for _, mt := range strings.Split(raw, ",") {
+				mt = strings.TrimSpace(mt)
+				if mt == "book" || mt == "show" || mt == "film" {
+					mediaTypes = append(mediaTypes, mt)
+				}
+			}
+		}
+
+		sortBy := c.DefaultQuery("sortBy", "title")
+		if !validSortBy[sortBy] {
+			sortBy = "title"
+		}
+
+		sortDir := c.DefaultQuery("sortDir", "asc")
+		if sortDir != "asc" && sortDir != "desc" {
+			sortDir = "asc"
+		}
+
+		limit, err := strconv.Atoi(c.DefaultQuery("limit", "20"))
+		if err != nil || limit < 1 || limit > 50 {
+			limit = 20
+		}
+
+		offset, err := strconv.Atoi(c.DefaultQuery("offset", "0"))
+		if err != nil || offset < 0 {
+			offset = 0
+		}
+
+		result, err := store.SearchSeries(c.Request.Context(), domain.SearchParams{
+			Q:          q,
+			MediaTypes: mediaTypes,
+			SortBy:     sortBy,
+			SortDir:    sortDir,
+			Limit:      limit,
+			Offset:     offset,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "search failed"})
+			return
+		}
+		c.JSON(http.StatusOK, result)
+	}
+}
+
 // getSeries handles GET /series/:id
 func getSeries(store Store) gin.HandlerFunc {
 	return func(c *gin.Context) {

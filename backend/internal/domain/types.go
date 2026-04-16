@@ -37,6 +37,36 @@ type Series struct {
 	Author         *string           `json:"author,omitempty"`         // from `metadata author:`
 	GroupType      *string           `json:"groupType,omitempty"`      // from `set group:`
 	CustomMetadata map[string]string `json:"customMetadata,omitempty"` // from arbitrary `metadata <key>:` tags
+	Published      bool              `json:"published"`
+}
+
+// SeriesSummary is a lightweight projection used by the browse/search endpoint.
+// CharacterCount is a derived aggregate — not stored on the row.
+type SeriesSummary struct {
+	ID             uuid.UUID `json:"id"`
+	Title          string    `json:"title"`
+	MediaType      MediaType `json:"mediaType"`
+	UnitLabel      string    `json:"unitLabel"`
+	TotalUnits     int       `json:"totalUnits"`
+	Author         *string   `json:"author,omitempty"`
+	Published      bool      `json:"published"`
+	CharacterCount int       `json:"characterCount"`
+}
+
+// SearchParams holds the validated query parameters for the series search endpoint.
+type SearchParams struct {
+	Q          string   // keyword filter against title and author
+	MediaTypes []string // empty = all; otherwise one or more of "book", "show", "film"
+	SortBy     string   // "title" | "author" | "media_type" | "total_units" | "character_count"
+	SortDir    string   // "asc" | "desc"
+	Limit      int
+	Offset     int
+}
+
+// SearchResult wraps a paginated list of SeriesSummary rows.
+type SearchResult struct {
+	Results []SeriesSummary `json:"results"`
+	Total   int             `json:"total"`
 }
 
 // ---------------------------------------------------------------------------

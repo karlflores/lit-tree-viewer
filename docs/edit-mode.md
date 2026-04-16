@@ -312,7 +312,7 @@ pre-refactor data (old flat `EditableGraph` shape) is automatically discarded.
 #### 6.13.7 ✅ Store interface + PGStore wrappers; routes registered; PATCH added to CORS; router test updated
 #### 6.13.8 ✅ `src/lib/importPayload.ts`: `ImportPayload`, `isBackendId`, `graphSnapshotToImport` (UUID memo), `applyIdRemap`; `mutate` helper + `createGraph` + `patchGraph` in `client.ts`
 #### 6.13.9 ✅ `handleSaveGraph` async: immediate local save + async POST/PATCH; `applyIdRemap` after POST to stabilise IDs
-#### 6.13.10 — Future: debounced auto-save, "Saving…" indicator
+#### 6.13.10 ✅ Debounced auto-save via PATCH — 5 s debounce on `editGraph` changes; silent PATCH when `isBackendId` is true; "Saving…" toolbar indicator; `editBaseRef` advanced on success so exit-confirm dialog stays quiet
 
 ---
 
@@ -348,11 +348,12 @@ pre-refactor data (old flat `EditableGraph` shape) is automatically discarded.
 - [x] Persistence is automatic — both fields live inside `Series` inside `GraphSnapshot`, which is already serialised by `saveEditGraph`/`saveViewerGraph`
 - [x] `snapshotToAst` in `ltgEmitter.ts` now emits `new chapter: "The Storm"` and `group "Season 1":` when labels/groups are present; falls back to unlabelled blocks for canvas-created graphs
 
-#### 6.14.4 — Edit Timeline tool (block labels + arc grouping)
-- [ ] Wire the "Edit Timeline" stub button in the edit toolbar to a slide-in overlay (or inline timeline UI)
-- [ ] Allow the user to assign a display label to any individual block (e.g. "The Storm" for chapter 6)
-- [ ] Allow the user to define named arc / volume / season groups over consecutive block ranges
-- [ ] Persist the result in `editGraph` (via 6.14.3 metadata fields) and round-trip through `snapshotToAst`
+#### 6.14.4 — Edit Timeline tool (block labels + arc grouping) ✅
+- [x] `src/components/EditTimelinePanel.tsx` — slide-in panel; mutual exclusion with all other edit-mode panels and on exit
+- [x] Block labels section: blocks 2–N with optional label inputs; block 1 shown as read-only "init (fixed)"; ● dot on blocks in a group
+- [x] Groups section: add/remove; each entry has a label input + from/to number selectors; placeholder adapts to `series.groupType`
+- [x] `handleOpenTimeline` + `timelinePanelOpen` state in `App.tsx`; reuses `handleUpdateSeriesMetadata` for persistence; "Edit Timeline" toolbar button active-highlights when panel is open
+- [x] Persisted in `editGraph.series.{blockLabels,blockGroups}`; round-tripped through `snapshotToAst` via 6.14.3
 
 ---
 

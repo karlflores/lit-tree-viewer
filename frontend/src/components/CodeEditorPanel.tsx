@@ -409,6 +409,13 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // Refs for auto-render on newline — kept current without stale closure issues.
+  const onCompileAndRenderRef    = useRef(onCompileAndRender)
+  onCompileAndRenderRef.current  = onCompileAndRender
+  const connectedRef             = useRef(false)
+  const autoRenderDebounceRef    = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoRenderInProgressRef  = useRef(false)
+
   const { addToast, setDiagnosticSummary } = useNotificationStore()
 
   // ── Editor + LSP setup ────────────────────────────────────────────────────
@@ -416,6 +423,8 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
     if (!containerRef.current) return
 
     // Update listener — persists to localStorage immediately and debounces didChange.
+    // Also triggers a silent auto-render whenever a newline is inserted, so the canvas
+    // stays in sync with the code without the user needing to press Render.
     const updateListener = EditorView.updateListener.of(update => {
       if (!update.docChanged) return
       const text = update.state.doc.toString()
@@ -425,6 +434,28 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
         docVersionRef.current++
         lspRef.current?.didChange(text, docVersionRef.current)
       }, 400)
+
+      // Detect newline insertion.
+      let hasNewline = false
+      update.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
+        if (!hasNewline && inserted.toString().includes('\n')) hasNewline = true
+      })
+      if (hasNewline) {
+        if (autoRenderDebounceRef.current) clearTimeout(autoRenderDebounceRef.current)
+        autoRenderDebounceRef.current = setTimeout(async () => {
+          autoRenderDebounceRef.current = null
+          if (!lspRef.current || !connectedRef.current || autoRenderInProgressRef.current) return
+          autoRenderInProgressRef.current = true
+          try {
+            const result = await lspRef.current.compile()
+            if (result?.ok) onCompileAndRenderRef.current(result.graph)
+          } catch {
+            // best-effort — silently ignore auto-render failures
+          } finally {
+            autoRenderInProgressRef.current = false
+          }
+        }, 600)
+      }
     })
 
     const view = new EditorView({
@@ -468,6 +499,7 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
       // onConnectionChange
       (isConnected: boolean) => {
         setConnected(isConnected)
+        connectedRef.current = isConnected
         if (isConnected) {
           // Send the current document to the server immediately.
           lspRef.current?.didOpen(viewRef.current?.state.doc.toString() ?? SAMPLE_DOC)
@@ -483,6 +515,7 @@ const CodeEditorPanel = memo(({ isOpen, onClose, onCompileAndRender, externalCon
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
+      if (autoRenderDebounceRef.current) clearTimeout(autoRenderDebounceRef.current)
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
       lsp.didClose()
