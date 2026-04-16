@@ -1,0 +1,445 @@
+openapi: 3.1.0
+
+info:
+  title: LitTree API
+  version: 0.2.0
+  description: |
+    Read-only REST API for the LitTree character-relationship viewer.
+    The API exposes series metadata, time-sliced graph snapshots at a given
+    narrative unit, and a full (unfiltered) graph used for layout and edit mode.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+tags:
+  - name: Series
+    description: Series metadata
+  - name: Graph
+    description: Time-sliced character relationship graphs
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+paths:
+
+  /api/series:
+    get:
+      summary: List all series
+      operationId: listSeries
+      tags: [Series]
+      responses:
+        '200':
+          description: Array of all series, ordered alphabetically by title.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Series'
+              example:
+                - id: "00000000-0000-0000-0000-000000000001"
+                  title: "Wuthering Heights"
+                  mediaType: "book"
+                  unitLabel: "Chapter"
+                  totalUnits: 34
+                  author: "Emily Brontë"
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/series/{id}:
+    get:
+      summary: Get a single series
+      operationId: getSeries
+      tags: [Series]
+      parameters:
+        - $ref: '#/components/parameters/SeriesId'
+      responses:
+        '200':
+          description: The requested series.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Series'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/series/{id}/graph:
+    get:
+      summary: Get a graph snapshot at a narrative unit
+      operationId: getGraphSnapshot
+      tags: [Graph]
+      description: |
+        Returns the character-relationship graph filtered to a specific narrative
+        unit (chapter number, episode number, etc.).
+
+        **Temporal filtering rules:**
+        - A character is included if `introducedAt <= at`.
+        - A relationship is included if `introducedAt <= at` AND (`endedAt` is null OR `endedAt >= at`).
+        - `character.name` is the effective display name resolved as of `at`
+          (the most recent rename at or before `at`, falling back to the base name).
+        - `character.renames` contains the full rename history up to `at` (omitted if empty).
+
+        Use `/graph/full` instead when you need the complete history with no
+        temporal filtering (e.g. for layout or edit mode).
+      parameters:
+        - $ref: '#/components/parameters/SeriesId'
+        - name: at
+          in: query
+          required: false
+          description: |
+            The narrative unit to snapshot the graph at (1-indexed).
+            Defaults to `1` (the first unit).
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+          example: 12
+      responses:
+        '200':
+          description: Graph snapshot — series metadata, characters, and relationships all filtered to `at`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/series/{id}/graph/full:
+    get:
+      summary: Get the full unfiltered graph
+      operationId: getFullGraph
+      tags: [Graph]
+      description: |
+        Returns all characters and all relationships for a series with **no
+        temporal filtering**. Every character and relationship is included
+        regardless of `introducedAt` or `endedAt`.
+
+        Intended for two use cases:
+        1. **Layout** — computing node positions from the complete character set
+           so positions are stable as the timeline scrubber moves.
+        2. **Edit mode entry** — seeding the editable graph with the full
+           relationship history so no ended relationships are silently dropped.
+
+        `atUnit` in the response is set to `series.totalUnits`.
+
+        Character display names are resolved at `totalUnits` (the final chapter).
+        `character.renames` contains the complete rename history.
+      parameters:
+        - $ref: '#/components/parameters/SeriesId'
+      responses:
+        '200':
+          description: |
+            Full graph — all characters and all relationships, unfiltered.
+            `atUnit` equals `series.totalUnits`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GraphSnapshot'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+# ---------------------------------------------------------------------------
+# Components
+# ---------------------------------------------------------------------------
+components:
+
+  # ── Parameters ────────────────────────────────────────────────────────────
+  parameters:
+
+    SeriesId:
+      name: id
+      in: path
+      required: true
+      description: UUID of the series.
+      schema:
+        type: string
+        format: uuid
+      example: "00000000-0000-0000-0000-000000000001"
+
+  # ── Responses ─────────────────────────────────────────────────────────────
+  responses:
+
+    BadRequest:
+      description: The request contained an invalid parameter (e.g. malformed UUID or non-integer `at`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "invalid series id"
+
+    NotFound:
+      description: The requested resource does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "series not found"
+
+    InternalError:
+      description: An unexpected server-side error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "internal server error"
+
+  # ── Schemas ───────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Media type enum ─────────────────────────────────────────────────────
+    MediaType:
+      type: string
+      enum: [book, show, film]
+      description: The medium of the series.
+
+    # ── Relationship kind enum ───────────────────────────────────────────────
+    RelationshipKind:
+      type: string
+      enum: [family, parent_child, romantic, ally, rival, enemy, mentor, other]
+      description: |
+        Semantic category of the relationship.
+        Present only for manually-created relationships; absent (`null`) for
+        LTG-imported relationships (use `label` for styling in that case).
+
+    # ── Series ───────────────────────────────────────────────────────────────
+    Series:
+      type: object
+      required: [id, title, mediaType, unitLabel, totalUnits]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable unique identifier.
+          example: "00000000-0000-0000-0000-000000000001"
+        title:
+          type: string
+          description: Display title of the series.
+          example: "Wuthering Heights"
+        mediaType:
+          $ref: '#/components/schemas/MediaType'
+        unitLabel:
+          type: string
+          description: |
+            Human-readable label for one narrative unit shown in the UI scrubber
+            (e.g. `"Chapter"`, `"Episode"`, `"Story Arc"`).
+          example: "Chapter"
+        totalUnits:
+          type: integer
+          minimum: 1
+          description: Total number of narrative units in the series.
+          example: 34
+        author:
+          type: string
+          nullable: true
+          description: Author name (from `metadata author:`). Omitted if not set.
+          example: "Emily Brontë"
+        groupType:
+          type: string
+          nullable: true
+          description: |
+            Display label for the organisational container level
+            (from `set group:`, e.g. `"Season"`, `"Volume"`).
+            Omitted if the series has no groups.
+          example: "Season"
+
+    # ── CharacterRename ──────────────────────────────────────────────────────
+    CharacterRename:
+      type: object
+      required: [name, introducedAt]
+      description: A single entry in a character's rename history.
+      properties:
+        name:
+          type: string
+          description: The new display name.
+          example: "The Hound"
+        introducedAt:
+          type: integer
+          minimum: 1
+          description: The narrative unit at which this name was adopted.
+          example: 5
+
+    # ── Character ────────────────────────────────────────────────────────────
+    Character:
+      type: object
+      required: [id, seriesId, name, aliases, description, imageUrl, introducedAt, diedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable unique identifier.
+          example: "11111111-0000-0000-0000-000000000001"
+        seriesId:
+          type: string
+          format: uuid
+          description: UUID of the parent series.
+          example: "00000000-0000-0000-0000-000000000001"
+        name:
+          type: string
+          description: |
+            Effective display name resolved as of the requested `at` unit.
+            This is the most recent rename at or before `at`, falling back
+            to the character's base name.
+          example: "Heathcliff"
+        aliases:
+          type: array
+          items:
+            type: string
+          description: Alternative names or epithets (never empty — returns `[]`).
+          example: []
+        renames:
+          type: array
+          items:
+            $ref: '#/components/schemas/CharacterRename'
+          description: |
+            Full rename history up to the requested `at` unit, ordered by
+            `introducedAt` ascending. Omitted entirely when the character has
+            no renames.
+        description:
+          type: string
+          nullable: true
+          description: Optional flavour text or biographical summary.
+          example: "A mysterious foundling raised at Wuthering Heights."
+        imageUrl:
+          type: string
+          nullable: true
+          description: URL of a portrait image, if available.
+          example: null
+        introducedAt:
+          type: integer
+          minimum: 1
+          description: The narrative unit at which the character first appears.
+          example: 1
+        diedAt:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: |
+            The narrative unit at which the character died, or `null` if alive.
+            A character is considered deceased for all units `>= diedAt`.
+          example: null
+        ltgIdentifier:
+          type: string
+          nullable: true
+          description: |
+            The actor identifier used in the LTG source file (e.g. `heathcliff`).
+            Present only for LTG-imported characters; omitted otherwise.
+          example: "heathcliff"
+
+    # ── Relationship ─────────────────────────────────────────────────────────
+    Relationship:
+      type: object
+      required: [id, seriesId, fromId, toId, label, directed, introducedAt, endedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Stable unique identifier.
+          example: "22222222-0000-0000-0000-000000000001"
+        seriesId:
+          type: string
+          format: uuid
+          description: UUID of the parent series.
+          example: "00000000-0000-0000-0000-000000000001"
+        fromId:
+          type: string
+          format: uuid
+          description: UUID of the source character.
+          example: "11111111-0000-0000-0000-000000000001"
+        toId:
+          type: string
+          format: uuid
+          description: UUID of the target character.
+          example: "11111111-0000-0000-0000-000000000002"
+        kind:
+          allOf:
+            - $ref: '#/components/schemas/RelationshipKind'
+          nullable: true
+          description: |
+            Semantic category. Present for manually-created relationships;
+            `null` for LTG-imported relationships.
+        label:
+          type: string
+          description: |
+            Free-form identifier for the relationship (e.g. `"siblings"`,
+            `"blood_oath"`, `"reluctant_allies"`). Always present.
+            Drives edge colour via a deterministic hash in the UI.
+          example: "childhood_friends"
+        directed:
+          type: boolean
+          description: |
+            `true` if the relationship has a direction (`fromId → toId`).
+            `false` for bidirectional (`fromId ↔ toId`).
+          example: false
+        introducedAt:
+          type: integer
+          minimum: 1
+          description: The narrative unit at which this relationship began.
+          example: 1
+        endedAt:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: |
+            The narrative unit at which the relationship ended, or `null`
+            if still active. A relationship is active at unit `n` when
+            `introducedAt <= n` AND (`endedAt` is null OR `endedAt >= n`).
+          example: null
+
+    # ── GraphSnapshot ─────────────────────────────────────────────────────────
+    GraphSnapshot:
+      type: object
+      required: [series, characters, relationships, atUnit]
+      description: |
+        A complete, time-sliced view of the character graph at a specific
+        narrative unit. All arrays are pre-filtered — the client renders
+        this directly without further temporal logic.
+      properties:
+        series:
+          $ref: '#/components/schemas/Series'
+        characters:
+          type: array
+          items:
+            $ref: '#/components/schemas/Character'
+          description: |
+            All characters introduced at or before `atUnit`, ordered by
+            `introducedAt` then `name`.
+        relationships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Relationship'
+          description: |
+            All relationships active at `atUnit`, ordered by `introducedAt`.
+        atUnit:
+          type: integer
+          minimum: 1
+          description: The narrative unit this snapshot was generated for. Echoes the `at` query parameter.
+          example: 12
+
+    # ── ErrorResponse ─────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "series not found"

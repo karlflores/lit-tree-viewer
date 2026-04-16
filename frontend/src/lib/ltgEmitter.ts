@@ -1,0 +1,491 @@
+import type { CompileSuccess } from './ltgLspClient'
+import type { GraphSnapshot } from '../types/domain'
+
+// ---------------------------------------------------------------------------
+// Raw shapes from CompileSuccess (matching openapi-langserver.yaml)
+// ---------------------------------------------------------------------------
+
+type RawSeries = {
+  title:          string
+  mediaType:      'book' | 'show' | 'film'
+  unitLabel:      string
+  totalUnits:     number
+  author:         string | null
+  groupType:      string | null
+  customMetadata?: Record<string, string>
+}
+
+type RawRename = {
+  name:         string
+  introducedAt: number
+}
+
+type RawCharacter = {
+  identifier:   string
+  name:         string
+  aliases:      string[]
+  renames:      RawRename[]
+  introducedAt: number
+  diedAt:       number | null
+}
+
+type RawRelationship = {
+  fromIdentifier: string
+  toIdentifier:   string
+  label:          string
+  directed:       boolean
+  introducedAt:   number
+  endedAt:        number | null
+}
+
+type RawBlock = {
+  index:      number
+  label:      string | null
+  groupLabel: string | null
+}
+
+// ---------------------------------------------------------------------------
+// LTG AST
+//
+// Two-phase approach: CompileSuccess → AST → string.
+// The AST layer separates the diff-reconstruction logic from the text
+// formatting logic, making each independently testable.
+// ---------------------------------------------------------------------------
+
+export type ActorNode    = { id: string; name: string }
+export type LinkNode     = { label: string; from: string; to: string; directed: boolean }
+export type UnlinkNode   = { label: string; a: string; b: string }
+export type DeceasedNode = { id: string }
+export type RenameNode   = { id: string; name: string }
+
+export type BlockBodyNode = {
+  actors:   ActorNode[]
+  links:    LinkNode[]
+  unlinks:  UnlinkNode[]
+  deceased: DeceasedNode[]
+  renames:  RenameNode[]
+}
+
+export type BlockNode = {
+  kind:  'block'
+  index: number
+  label: string | null
+  body:  BlockBodyNode
+}
+
+export type GroupNode = {
+  kind:   'group'
+  label:  string | null
+  blocks: BlockNode[]
+}
+
+export type LtgAst = {
+  series:  RawSeries
+  colours: Record<string, string>
+  init:    BlockBodyNode
+  blocks:  (BlockNode | GroupNode)[]
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — CompileSuccess → LtgAst
+//
+// Core algorithm: temporal diff reconstruction.
+// The compiled graph stores full history (state-based); LTG stores
+// changes per block (event-sourced).  For each block N we ask:
+// "what changed between N−1 and N?"
+//
+//   actors:   characters where introducedAt === N
+//   links:    relationships where introducedAt === N
+//   unlinks:  relationships where endedAt === N − 1
+//             (unlink in block N sets endedAt = N − 1 per spec)
+//   deceased: characters where diedAt === N
+//   renames:  rename entries where introducedAt === N
+// ---------------------------------------------------------------------------
+
+export function compiledToAst(compiled: CompileSuccess): LtgAst {
+  const series    = compiled.series        as RawSeries
+  const chars     = compiled.characters    as RawCharacter[]
+  const rels      = compiled.relationships as RawRelationship[]
+  const rawBlocks = compiled.blocks        as RawBlock[]
+  const colours   = compiled.colours
+
+  function bodyForBlock(n: number, isInit: boolean): BlockBodyNode {
+    const actors: ActorNode[] = chars
+      .filter(c => c.introducedAt === n)
+      .map(c => ({ id: c.identifier, name: c.name }))
+
+    const links: LinkNode[] = rels
+      .filter(r => r.introducedAt === n)
+      .map(r => ({
+        label:    r.label,
+        from:     r.fromIdentifier,
+        to:       r.toIdentifier,
+        directed: r.directed,
+      }))
+
+    // unlink in block N sets endedAt = N − 1, so we find those relationships here.
+    // Not valid in init (UnlinkInInit), so we skip for block 1.
+    const unlinks: UnlinkNode[] = isInit ? [] : rels
+      .filter(r => r.endedAt === n - 1)
+      .map(r => ({ label: r.label, a: r.fromIdentifier, b: r.toIdentifier }))
+
+    const deceased: DeceasedNode[] = isInit ? [] : chars
+      .filter(c => c.diedAt === n)
+      .map(c => ({ id: c.identifier }))
+
+    // Flatten all characters' rename histories, keeping only renames at block N.
+    const renames: RenameNode[] = isInit ? [] : chars.flatMap(c =>
+      c.renames
+        .filter(r => r.introducedAt === n)
+        .map(r => ({ id: c.identifier, name: r.name })),
+    )
+
+    return { actors, links, unlinks, deceased, renames }
+  }
+
+  const init   = bodyForBlock(1, true)
+
+  // Build a complete block list covering every index from 2 to totalUnits.
+  // compiled.blocks may omit blocks that have no events; we synthesise
+  // empty entries for those so every chapter gets a `new <type>:` header.
+  const rawByIndex = new Map<number, RawBlock>()
+  for (const b of rawBlocks) rawByIndex.set(b.index, b)
+
+  const allRawBlocks: RawBlock[] = []
+  for (let i = 2; i <= series.totalUnits; i++) {
+    allRawBlocks.push(rawByIndex.get(i) ?? { index: i, label: null, groupLabel: null })
+  }
+
+  const blocks = buildBlocks(allRawBlocks, bodyForBlock)
+
+  return { series, colours, init, blocks }
+}
+
+/** Group consecutive same-label blocks into GroupNodes. */
+function buildBlocks(
+  rawBlocks: RawBlock[],
+  bodyForBlock: (n: number, isInit: boolean) => BlockBodyNode,
+): (BlockNode | GroupNode)[] {
+  const result: (BlockNode | GroupNode)[] = []
+  let i = 0
+
+  while (i < rawBlocks.length) {
+    const raw = rawBlocks[i]!
+
+    if (raw.groupLabel === null) {
+      result.push({
+        kind:  'block',
+        index: raw.index,
+        label: raw.label,
+        body:  bodyForBlock(raw.index, false),
+      })
+      i++
+    } else {
+      const groupLabel = raw.groupLabel
+      const groupBlocks: BlockNode[] = []
+
+      while (i < rawBlocks.length && rawBlocks[i]!.groupLabel === groupLabel) {
+        const b = rawBlocks[i]!
+        groupBlocks.push({
+          kind:  'block',
+          index: b.index,
+          label: b.label,
+          body:  bodyForBlock(b.index, false),
+        })
+        i++
+      }
+
+      result.push({ kind: 'group', label: groupLabel, blocks: groupBlocks })
+    }
+  }
+
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — LtgAst → string (pretty-printer)
+//
+// Indentation rules (from spec):
+//   init: body                        →  4 spaces
+//   new <type>: (standalone)          →  0 spaces, body at 4
+//   group "...": / new <type>:        →  0 / 4 spaces, body at 8
+// ---------------------------------------------------------------------------
+
+export function astToLtg(ast: LtgAst): string {
+  const { type: blockType, displayOverride } = deriveIdentifier(ast.series.unitLabel)
+  const lines: string[] = []
+
+  // ── Metadata ──────────────────────────────────────────────────────────────
+  lines.push(`metadata title:  "${ast.series.title}"`)
+  lines.push(`metadata media:  ${ast.series.mediaType}`)
+  if (ast.series.author) lines.push(`metadata author: "${ast.series.author}"`)
+  if (ast.series.customMetadata) {
+    for (const [key, value] of Object.entries(ast.series.customMetadata)) {
+      if (key.trim()) lines.push(`metadata ${key.trim()}: "${value}"`)
+    }
+  }
+  lines.push('')
+
+  // ── Structural directives ─────────────────────────────────────────────────
+  lines.push(
+    displayOverride
+      ? `set block: ${blockType} = "${displayOverride}"`
+      : `set block: ${blockType}`,
+  )
+  if (ast.series.groupType) {
+    const { type: groupType } = deriveIdentifier(ast.series.groupType)
+    lines.push(`set group: ${groupType}`)
+  }
+  lines.push('')
+
+  // ── Colour overrides ──────────────────────────────────────────────────────
+  // Note: CompileSuccess.colours includes both explicit overrides and
+  // hash-derived colours. We only emit explicit overrides to avoid noise.
+  // Until the language server distinguishes them, we skip colours here and
+  // rely on the deterministic hash for re-derived colours.
+  // TODO: emit explicit colour overrides once the server marks them.
+
+  // ── Init block ────────────────────────────────────────────────────────────
+  lines.push('init:')
+  for (const line of emitBody(ast.init, '    ')) lines.push(line)
+
+  // ── Remaining blocks ──────────────────────────────────────────────────────
+  for (const node of ast.blocks) {
+    lines.push('')
+    if (node.kind === 'group') {
+      lines.push(node.label ? `group "${node.label}":` : 'group:')
+      for (const block of node.blocks) {
+        for (const line of emitBlock(block, blockType, '    ')) lines.push(line)
+      }
+    } else {
+      for (const line of emitBlock(node, blockType, '')) lines.push(line)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function emitBlock(block: BlockNode, blockType: string, indent: string): string[] {
+  const header = block.label
+    ? `${indent}new ${blockType}: "${block.label}"`
+    : `${indent}new ${blockType}:`
+  const bodyLines = emitBody(block.body, indent + '    ')
+  return [header, ...bodyLines]
+}
+
+function emitBody(body: BlockBodyNode, indent: string): string[] {
+  const lines: string[] = []
+
+  for (const n of body.actors)
+    lines.push(`${indent}actor ${n.id}: "${n.name}"`)
+
+  for (const n of body.links) {
+    const edge = n.directed ? `${n.from} -> ${n.to}` : `${n.from} -- ${n.to}`
+    lines.push(`${indent}link ${n.label}(${edge})`)
+  }
+
+  for (const n of body.unlinks)
+    lines.push(`${indent}unlink ${n.label} ${n.a} ${n.b}`)
+
+  for (const n of body.deceased)
+    lines.push(`${indent}deceased ${n.id}`)
+
+  for (const n of body.renames)
+    lines.push(`${indent}rename ${n.id}: "${n.name}"`)
+
+  return lines
+}
+
+// ---------------------------------------------------------------------------
+// Convenience
+// ---------------------------------------------------------------------------
+
+/** Compile a CompileSuccess directly to an LTG string. */
+export function emitLtg(compiled: CompileSuccess): string {
+  return astToLtg(compiledToAst(compiled))
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot → AST (canvas-authored or compiled-derived graphs)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a stable LTG identifier from a character's display name.
+ * Mirrors the Go backend `slugify` function.
+ * Uses `ltgIdentifier` when present so compiled-round-trip graphs stay stable.
+ */
+function slugifyName(name: string): string {
+  const base = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    || 'char'
+  return /^[0-9]/.test(base) ? `c${base}` : base
+}
+
+/**
+ * Build a deduplicated identifier map for a set of characters.
+ * Prefers `ltgIdentifier` when present; derives a slug from `name` otherwise.
+ * Disambiguates duplicates with `_2`, `_3` suffixes.
+ */
+function buildIdentifierMap(characters: GraphSnapshot['characters']): Map<string, string> {
+  const map  = new Map<string, string>()
+  const used = new Set<string>()
+
+  // First pass: assign known identifiers.
+  for (const c of characters) {
+    if (c.ltgIdentifier) {
+      map.set(c.id, c.ltgIdentifier)
+      used.add(c.ltgIdentifier)
+    }
+  }
+
+  // Second pass: derive slugs for canvas-created characters.
+  for (const c of characters) {
+    if (map.has(c.id)) continue
+    const base = slugifyName(c.name)
+    let ident = base
+    let n = 2
+    while (used.has(ident)) ident = `${base}_${n++}`
+    map.set(c.id, ident)
+    used.add(ident)
+  }
+
+  return map
+}
+
+/**
+ * Convert a `GraphSnapshot` (canvas-authored or full-history) into an `LtgAst`.
+ *
+ * The graph must be the full unfiltered edit graph (all characters and
+ * relationships across all time), not a temporally-filtered display snapshot.
+ * Use `editGraph` directly, not the result of `editableToSnapshot`.
+ */
+export function snapshotToAst(graph: GraphSnapshot): LtgAst {
+  const idFor = buildIdentifierMap(graph.characters)
+
+  const slugLabel = (label: string) =>
+    label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || label
+
+  function bodyForUnit(unit: number, isInit: boolean): BlockBodyNode {
+    const actors: ActorNode[] = graph.characters
+      .filter(c => c.introducedAt === unit)
+      .map(c => ({ id: idFor.get(c.id)!, name: c.name }))
+
+    const links: LinkNode[] = graph.relationships
+      .filter(r => r.introducedAt === unit)
+      .map(r => ({
+        label:    slugLabel(r.label),
+        from:     idFor.get(r.fromId)!,
+        to:       idFor.get(r.toId)!,
+        directed: r.directed,
+      }))
+
+    // unlink in block N means endedAt = N-1
+    const unlinks: UnlinkNode[] = isInit ? [] : graph.relationships
+      .filter(r => r.endedAt !== null && r.endedAt === unit - 1)
+      .map(r => ({
+        label: slugLabel(r.label),
+        a:     idFor.get(r.fromId)!,
+        b:     idFor.get(r.toId)!,
+      }))
+
+    const deceased: DeceasedNode[] = isInit ? [] : graph.characters
+      .filter(c => c.diedAt === unit)
+      .map(c => ({ id: idFor.get(c.id)! }))
+
+    // Renames are not tracked in canvas edit mode; omit.
+    return { actors, links, unlinks, deceased, renames: [] }
+  }
+
+  const rawSeries: RawSeries = {
+    title:          graph.series.title,
+    mediaType:      graph.series.mediaType,
+    unitLabel:      graph.series.unitLabel,
+    totalUnits:     graph.series.totalUnits,
+    author:         graph.series.author    ?? null,
+    groupType:      graph.series.groupType ?? null,
+    customMetadata: graph.series.customMetadata,
+  }
+
+  const init = bodyForUnit(1, true)
+
+  // ---------------------------------------------------------------------------
+  // Build block list, respecting blockGroups and blockLabels from the series.
+  // Blocks inside a group are nested under a GroupNode; others are standalone.
+  // ---------------------------------------------------------------------------
+  const blockLabels = graph.series.blockLabels ?? {}
+  const blockGroups = graph.series.blockGroups ?? []
+
+  // Map every block index to the index of its containing group (if any).
+  const indexToGroupIdx = new Map<number, number>()
+  for (let gi = 0; gi < blockGroups.length; gi++) {
+    const [start, end] = blockGroups[gi]!.range
+    for (let b = start; b <= end; b++) indexToGroupIdx.set(b, gi)
+  }
+
+  const blocks: (BlockNode | GroupNode)[] = []
+  let bi = 2
+  while (bi <= graph.series.totalUnits) {
+    const gi = indexToGroupIdx.get(bi)
+    if (gi !== undefined) {
+      const group = blockGroups[gi]!
+      const [start, end] = group.range
+      const groupBlocks: BlockNode[] = []
+      for (let b = start; b <= Math.min(end, graph.series.totalUnits); b++) {
+        groupBlocks.push({
+          kind:  'block',
+          index: b,
+          label: (blockLabels as Record<number, string>)[b] ?? null,
+          body:  bodyForUnit(b, false),
+        })
+      }
+      blocks.push({ kind: 'group', label: group.label, blocks: groupBlocks })
+      bi = Math.min(end, graph.series.totalUnits) + 1
+    } else {
+      blocks.push({
+        kind:  'block',
+        index: bi,
+        label: (blockLabels as Record<number, string>)[bi] ?? null,
+        body:  bodyForUnit(bi, false),
+      })
+      bi++
+    }
+  }
+
+  return {
+    series:  rawSeries,
+    colours: (graph.colours ?? {}) as Record<string, string>,
+    init,
+    blocks,
+  }
+}
+
+/** Emit an LTG source string from a `GraphSnapshot`. */
+export function graphSnapshotToLtg(graph: GraphSnapshot): string {
+  return astToLtg(snapshotToAst(graph))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the LTG identifier (e.g. "chapter") from a display label (e.g. "Chapter").
+ * If the auto-derived title-case form doesn't match the original label a
+ * `displayOverride` is included for the `set block: type = "..."` form.
+ *
+ * Examples:
+ *   "Chapter"   → { type: "chapter" }
+ *   "Story Arc" → { type: "story_arc" }
+ *   "CHAPTER"   → { type: "chapter", displayOverride: "CHAPTER" }
+ */
+export function deriveIdentifier(
+  displayLabel: string,
+): { type: string; displayOverride?: string } {
+  const type    = displayLabel.toLowerCase().replace(/ /g, '_')
+  const derived = type.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+  return derived === displayLabel
+    ? { type }
+    : { type, displayOverride: displayLabel }
+}

@@ -30,6 +30,9 @@ type mockStore struct {
 
 	snapshot    domain.GraphSnapshot
 	snapshotErr error
+
+	fullGraph    domain.GraphSnapshot
+	fullGraphErr error
 }
 
 func (m *mockStore) GetAllSeries(_ context.Context) ([]domain.Series, error) {
@@ -42,6 +45,22 @@ func (m *mockStore) GetSeriesByID(_ context.Context, _ uuid.UUID) (domain.Series
 
 func (m *mockStore) GetGraphSnapshot(_ context.Context, _ uuid.UUID, _ int) (domain.GraphSnapshot, error) {
 	return m.snapshot, m.snapshotErr
+}
+
+func (m *mockStore) GetFullGraph(_ context.Context, _ uuid.UUID) (domain.GraphSnapshot, error) {
+	return m.fullGraph, m.fullGraphErr
+}
+
+func (m *mockStore) GetCompiledGraph(_ context.Context, _ uuid.UUID) (domain.CompiledGraph, error) {
+	return domain.CompiledGraph{}, nil
+}
+
+func (m *mockStore) CreateGraph(_ context.Context, _ domain.ImportPayload) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (m *mockStore) ReplaceGraph(_ context.Context, _ uuid.UUID, _ domain.ImportPayload) error {
+	return nil
 }
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -73,6 +92,7 @@ func newRouter(store Store) *gin.Engine {
 	v1.GET("/series", listSeries(store))
 	v1.GET("/series/:id", getSeries(store))
 	v1.GET("/series/:id/graph", getGraphSnapshot(store))
+	v1.GET("/series/:id/graph/full", getFullGraph(store))
 	return r
 }
 
@@ -256,6 +276,50 @@ func TestGetGraphSnapshot_NotFound(t *testing.T) {
 func TestGetGraphSnapshot_DBError(t *testing.T) {
 	store := &mockStore{snapshotErr: errors.New("timeout")}
 	w := do(t, newRouter(store), "GET", "/api/series/"+seriesID.String()+"/graph?at=1")
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+}
+
+// ── getFullGraph ──────────────────────────────────────────────────────────────
+
+func TestGetFullGraph_OK(t *testing.T) {
+	store := &mockStore{fullGraph: fixSnapshot}
+	w := do(t, newRouter(store), "GET", "/api/series/"+seriesID.String()+"/graph/full")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+
+	var got domain.GraphSnapshot
+	decodeJSON(t, w.Body.Bytes(), &got)
+	if got.Series.ID != fixSeries.ID {
+		t.Errorf("want series id %s, got %s", fixSeries.ID, got.Series.ID)
+	}
+}
+
+func TestGetFullGraph_InvalidUUID(t *testing.T) {
+	store := &mockStore{}
+	w := do(t, newRouter(store), "GET", "/api/series/bad-uuid/graph/full")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", w.Code)
+	}
+}
+
+func TestGetFullGraph_NotFound(t *testing.T) {
+	store := &mockStore{fullGraphErr: db.ErrNotFound}
+	w := do(t, newRouter(store), "GET", "/api/series/"+seriesID.String()+"/graph/full")
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+func TestGetFullGraph_DBError(t *testing.T) {
+	store := &mockStore{fullGraphErr: errors.New("timeout")}
+	w := do(t, newRouter(store), "GET", "/api/series/"+seriesID.String()+"/graph/full")
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d", w.Code)

@@ -29,3 +29,23 @@ func (s *PGStore) GetSeriesByID(ctx context.Context, id uuid.UUID) (domain.Serie
 func (s *PGStore) GetGraphSnapshot(ctx context.Context, seriesID uuid.UUID, atUnit int) (domain.GraphSnapshot, error) {
 	return GetGraphSnapshot(ctx, s.pool, seriesID, atUnit)
 }
+
+func (s *PGStore) GetCompiledGraph(ctx context.Context, seriesID uuid.UUID) (domain.CompiledGraph, error) {
+	return GetCompiledGraph(ctx, s.pool, seriesID)
+}
+
+func (s *PGStore) GetFullGraph(ctx context.Context, seriesID uuid.UUID) (domain.GraphSnapshot, error) {
+	return GetFullGraph(ctx, s.pool, seriesID)
+}
+
+func (s *PGStore) CreateGraph(ctx context.Context, payload domain.ImportPayload) (uuid.UUID, error) {
+	return CreateGraph(ctx, s.pool, payload)
+}
+
+func (s *PGStore) ReplaceGraph(ctx context.Context, seriesID uuid.UUID, payload domain.ImportPayload) error {
+	return ReplaceGraph(ctx, s.pool, seriesID, payload)
+}
+
+func (s *PGStore) SearchSeries(ctx context.Context, params domain.SearchParams) (domain.SearchResult, error) {
+	return SearchSeries(ctx, s.pool, params)
+}

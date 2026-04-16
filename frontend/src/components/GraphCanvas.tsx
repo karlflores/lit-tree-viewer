@@ -1,20 +1,22 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import {
   applyNodeChanges,
   Background,
   MarkerType,
-  Panel,
   ReactFlow,
+  useReactFlow,
   type Edge,
+  type EdgeMouseHandler,
   type Node,
   type NodeChange,
   type NodeMouseHandler,
+  type OnConnect,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
 import type { Character, GraphSnapshot, Relationship } from '../types/domain'
 import { useAnimatedLayout } from '../hooks/useAnimatedLayout'
-import { applyDagreLayout } from '../lib/layout'
+import { applyLayout } from '../lib/layout'
 import { getEdgeStyle } from '../lib/edgeStyles'
 import { loadPositions, savePosition } from '../lib/nodePositions'
 import CharacterNode, { type CharacterNodeData } from './CharacterNode'
@@ -23,6 +25,43 @@ import ZoomControls from './ZoomControls'
 
 const nodeTypes = { character: CharacterNode }
 const edgeTypes = { relationship: RelationshipEdge }
+
+// ---------------------------------------------------------------------------
+// FitViewTrigger — null component that lives inside ReactFlow's provider tree
+// so it can safely call useReactFlow(). Exposes fitView via a callback ref and
+// fits the viewport the first time nodes actually appear in the graph.
+// ---------------------------------------------------------------------------
+
+type FitViewTriggerProps = {
+  fitViewRef: MutableRefObject<(() => void) | null>
+  nodeCount: number
+}
+
+const FitViewTrigger = ({ fitViewRef, nodeCount }: FitViewTriggerProps) => {
+  const { fitView } = useReactFlow()
+
+  // Always keep the ref pointing to the latest fitView closure
+  fitViewRef.current = useCallback(
+    () => fitView({ padding: 0.15, duration: 400 }),
+    [fitView],
+  )
+
+  // Fit the first time nodes appear — handles async data loading where nodes
+  // aren't present at mount time and a fixed timeout would fire too early.
+  const hasFitRef = useRef(false)
+  useEffect(() => {
+    if (nodeCount === 0 || hasFitRef.current) return
+    hasFitRef.current = true
+    const t = setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 50)
+    return () => clearTimeout(t)
+  }, [nodeCount, fitView])
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 const toFlowNode = (
   character: Character,
@@ -35,8 +74,11 @@ const toFlowNode = (
   data: { character, atUnit, isSelected: character.id === selectedId },
 })
 
-const toFlowEdge = (relationship: Relationship): Edge<RelationshipEdgeData> => {
-  const style = getEdgeStyle(relationship.kind, relationship.label)
+const toFlowEdge = (
+  relationship: Relationship,
+  colours?: Readonly<Record<string, string>>,
+): Edge<RelationshipEdgeData> => {
+  const style = getEdgeStyle(relationship.kind, relationship.label, colours)
   return {
     id: relationship.id,
     source: relationship.fromId,
@@ -45,8 +87,23 @@ const toFlowEdge = (relationship: Relationship): Edge<RelationshipEdgeData> => {
     markerEnd: relationship.directed
       ? { type: MarkerType.ArrowClosed, color: style.color, width: 16, height: 16 }
       : undefined,
-    data: { kind: relationship.kind, label: relationship.label, directed: relationship.directed },
+    data: { kind: relationship.kind, label: relationship.label, directed: relationship.directed, colours },
   }
+}
+
+/** Assigns parallelIndex/parallelCount to edges sharing the same node pair. */
+function withParallelOffsets(raw: Edge<RelationshipEdgeData>[]): Edge<RelationshipEdgeData>[] {
+  const groups = new Map<string, string[]>()
+  for (const e of raw) {
+    const key = [e.source, e.target].sort().join('|')
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(e.id)
+  }
+  return raw.map(e => {
+    const key   = [e.source, e.target].sort().join('|')
+    const group = groups.get(key)!
+    return { ...e, data: { ...e.data, parallelIndex: group.indexOf(e.id), parallelCount: group.length } as RelationshipEdgeData }
+  })
 }
 
 const structureKey = (nodes: readonly Node[], edges: readonly Edge[]): string =>
@@ -55,94 +112,215 @@ const structureKey = (nodes: readonly Node[], edges: readonly Edge[]): string =>
     ...edges.map(e => `${e.source}>${e.target}`).sort(),
   ].join('|')
 
+// ---------------------------------------------------------------------------
+// AddNodeHandler — places a new node at viewport centre when `trigger` increments.
+// Must live inside ReactFlow's provider tree to use useReactFlow().
+// ---------------------------------------------------------------------------
+
+type AddNodeHandlerProps = {
+  trigger: number
+  seriesId: string
+  atUnit: number
+  savedPositionsRef: MutableRefObject<Map<string, { x: number; y: number }>>
+  onAddCharacter: (character: Character) => void
+}
+
+const AddNodeHandler = ({ trigger, seriesId, atUnit, savedPositionsRef, onAddCharacter }: AddNodeHandlerProps) => {
+  const { screenToFlowPosition } = useReactFlow()
+  const prevTriggerRef = useRef(trigger)
+
+  useEffect(() => {
+    if (trigger === prevTriggerRef.current) return
+    prevTriggerRef.current = trigger
+
+    const pos = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+    const id = crypto.randomUUID()
+
+    // Pre-seed position so layout won't override it with Phase 4 incremental placement.
+    savedPositionsRef.current.set(id, pos)
+    savePosition(seriesId, id, pos)
+
+    onAddCharacter({
+      id,
+      seriesId,
+      name: '',
+      aliases: [],
+      description: null,
+      imageUrl: null,
+      introducedAt: atUnit,
+      diedAt: null,
+    })
+  }, [trigger, seriesId, atUnit, savedPositionsRef, screenToFlowPosition, onAddCharacter])
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// GraphCanvas
+// ---------------------------------------------------------------------------
+
 type Props = {
   snapshot: GraphSnapshot
+  layoutSnapshot: GraphSnapshot
   selectedCharacterId: string | null
   showDeceased: boolean
   onSelectCharacter: (character: Character | null) => void
   menuOpen: boolean
-  onToggleMenu: () => void
   onCloseMenu: () => void
+  editMode?: boolean
+  addNodeTrigger?: number
+  onAddCharacter?: (character: Character) => void
+  onCommitName?: (id: string, name: string) => void
+  onCancelNode?: (id: string) => void
+  onConnect?: OnConnect
+  onSelectRelationship?: (rel: Relationship | null) => void
+  onEdgesDelete?: (edges: Edge[]) => void
+  onNodeContextMenu?: (id: string, position: { x: number; y: number }) => void
 }
 
-const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onToggleMenu, onCloseMenu }: Props) => {
+const GraphCanvas = memo(({ snapshot, layoutSnapshot, selectedCharacterId, showDeceased, onSelectCharacter, menuOpen, onCloseMenu, editMode, addNodeTrigger, onAddCharacter, onCommitName, onCancelNode, onConnect, onSelectRelationship, onEdgesDelete, onNodeContextMenu }: Props) => {
   const { characters, relationships, atUnit } = snapshot
+  const colours = snapshot.colours
 
-  const visibleCharacters = useMemo(
-    () => showDeceased
-      ? characters
-      : characters.filter(c => c.diedAt === null || c.diedAt > atUnit),
-    [characters, atUnit, showDeceased],
+  // ── Layout graph (final chapter — full character set) ────────────────────
+  // Positions are computed once on the complete graph so they are stable
+  // across all timeline positions. The layout snapshot is always at totalUnits.
+  const layoutRawNodes = useMemo(
+    () => layoutSnapshot.characters.map(c => toFlowNode(c, layoutSnapshot.atUnit, selectedCharacterId)),
+    [layoutSnapshot.characters, layoutSnapshot.atUnit, selectedCharacterId],
   )
 
-  const visibleIds = useMemo(
-    () => new Set(visibleCharacters.map(c => c.id)),
-    [visibleCharacters],
+  const layoutEdges = useMemo(() => {
+    const allIds = new Set(layoutSnapshot.characters.map(c => c.id))
+    const raw = layoutSnapshot.relationships
+      .filter(r => allIds.has(r.fromId) && allIds.has(r.toId))
+      .map(r => toFlowEdge(r, colours))
+    return withParallelOffsets(raw)
+  }, [layoutSnapshot.relationships, layoutSnapshot.characters, colours])
+
+  // ── Current chapter nodes (for data sync only) ───────────────────────────
+  // When the user scrubs the timeline, character names/states can change but
+  // positions must not. This array is used only to update node .data fields.
+  const currentRawNodes = useMemo(
+    () => characters.map(c => toFlowNode(c, atUnit, selectedCharacterId)),
+    [characters, atUnit, selectedCharacterId],
   )
 
-  const visibleRelationships = useMemo(
-    () => relationships.filter(r => visibleIds.has(r.fromId) && visibleIds.has(r.toId)),
-    [relationships, visibleIds],
-  )
+  // ── Visible subsets (for display only) ───────────────────────────────────
+  const visibleIds = useMemo(() => {
+    const ids = showDeceased
+      ? characters.map(c => c.id)
+      : characters.filter(c => c.diedAt === null || c.diedAt > atUnit).map(c => c.id)
+    return new Set(ids)
+  }, [characters, atUnit, showDeceased])
 
-  const rawNodes = useMemo(
-    () => visibleCharacters.map(c => toFlowNode(c, atUnit, selectedCharacterId)),
-    [visibleCharacters, atUnit, selectedCharacterId],
-  )
-
-  const edges = useMemo(
-    () => visibleRelationships.map(toFlowEdge),
-    [visibleRelationships],
-  )
+  // Display edges — relationships that exist at the current chapter, filtered
+  // to visible nodes. Separate from layoutEdges (which span all chapters).
+  const visibleEdges = useMemo(() => {
+    const currentIds = new Set(characters.map(c => c.id))
+    const raw = relationships
+      .filter(r => currentIds.has(r.fromId) && currentIds.has(r.toId))
+      .map(r => toFlowEdge(r, colours))
+    return withParallelOffsets(raw).filter(e => visibleIds.has(e.source) && visibleIds.has(e.target))
+  }, [relationships, colours, characters, visibleIds])
 
   const seriesId = snapshot.series.id
 
+  // ── Pending node naming ───────────────────────────────────────────────────
+  const [pendingNodeId, setPendingNodeId] = useState<string | null>(null)
+
+  const handleNodeCreated = useCallback((character: Character) => {
+    setPendingNodeId(character.id)
+    onAddCharacter?.(character)
+  }, [onAddCharacter])
+
+  const handleCommitName = useCallback((id: string, name: string) => {
+    setPendingNodeId(null)
+    onCommitName?.(id, name)
+  }, [onCommitName])
+
+  const handleCancelNode = useCallback((id: string) => {
+    setPendingNodeId(null)
+    onCancelNode?.(id)
+  }, [onCancelNode])
+
   // Saved positions — loaded once from localStorage and updated on every drag end.
-  // Keyed by character ID so positions survive chapter changes and re-layouts.
   const savedPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
   const isFirstLayoutRef = useRef(true)
   if (isFirstLayoutRef.current) {
-    // Initialise synchronously before first render so the first layout uses them.
     savedPositionsRef.current = loadPositions(seriesId)
     isFirstLayoutRef.current = false
   }
 
-  // layoutNodes holds the target positions passed to the animation hook.
-  // Drag end also writes back here so data-only chapter changes preserve manual positioning.
   const [layoutNodes, setLayoutNodes] = useState<Node[]>([])
   const prevStructureKeyRef = useRef('')
 
+  // Ref mirror of currentRawNodes — always up to date, but reading it inside
+  // the layout effect does not add it to that effect's dependency array.
+  // This prevents chapter scrubs from re-triggering the (expensive) layout.
+  const currentRawNodesRef = useRef(currentRawNodes)
+  useEffect(() => { currentRawNodesRef.current = currentRawNodes })
+
+  // ── Effect 1: layout ─────────────────────────────────────────────────────
+  // Fires only when the full-graph structure changes (characters or edges
+  // added/removed). Runs the force algorithm and caches all positions so
+  // subsequent chapter scrubs never need to re-layout.
+  //
+  // Immediately overlays current-chapter display data after computing positions.
+  // Without this, nodes would briefly (or permanently, if Effect 2 doesn't
+  // re-fire) show state from the layout snapshot's final chapter — e.g. a
+  // character who dies in chapter 5 appearing deceased when viewing chapter 1.
   useEffect(() => {
-    const key = structureKey(rawNodes, edges)
-
-    if (key === prevStructureKeyRef.current) {
-      // Data-only change: sync updated data without touching positions.
-      setLayoutNodes(prev => prev.map(n => {
-        const updated = rawNodes.find(rn => rn.id === n.id)
-        return updated ? { ...n, data: updated.data } : n
-      }))
-    } else {
-      prevStructureKeyRef.current = key
-      // Apply dagre layout then override with any saved positions.
-      const dagreNodes = applyDagreLayout(rawNodes, edges)
-      setLayoutNodes(dagreNodes.map(n => {
-        const saved = savedPositionsRef.current.get(n.id)
-        return saved ? { ...n, position: saved } : n
-      }))
+    const key = structureKey(layoutRawNodes, layoutEdges)
+    if (key === prevStructureKeyRef.current) return
+    prevStructureKeyRef.current = key
+    const laid = applyLayout(layoutRawNodes, layoutEdges, savedPositionsRef.current)
+    for (const n of laid) {
+      savedPositionsRef.current.set(n.id, n.position)
     }
-  }, [rawNodes, edges])
+    const currentDataMap = new Map(currentRawNodesRef.current.map(n => [n.id, n.data]))
+    setLayoutNodes(laid.map(n => {
+      const d = currentDataMap.get(n.id)
+      return d ? { ...n, data: d } : n
+    }))
+  }, [layoutRawNodes, layoutEdges])
 
-  // animatedNodes interpolates layoutNodes → display positions.
-  // setAnimatedNodes is the raw setter used by drag to bypass animation.
-  const [animatedNodes, setAnimatedNodes] = useAnimatedLayout(layoutNodes)
+  // ── Effect 2: data sync ───────────────────────────────────────────────────
+  // Fires when the displayed chapter changes. Updates character names, alive/
+  // deceased state, and selection — without touching any node positions.
+  useEffect(() => {
+    setLayoutNodes(prev => prev.map(n => {
+      const updated = currentRawNodes.find(rn => rn.id === n.id)
+      return updated ? { ...n, data: updated.data } : n
+    }))
+  }, [currentRawNodes])
+
+  // allAnimatedNodes holds interpolated positions for every character.
+  // Filter to visibleIds before passing to ReactFlow.
+  const [allAnimatedNodes, setAnimatedNodes] = useAnimatedLayout(layoutNodes)
+
+  const animatedNodes = useMemo(
+    () => allAnimatedNodes
+      .filter(n => visibleIds.has(n.id))
+      .map(n => {
+        const base = editMode ? { ...n, data: { ...n.data, editMode: true } } : n
+        return n.id === pendingNodeId
+          ? { ...base, data: { ...base.data, isNaming: true, onCommitName: handleCommitName, onCancelNode: handleCancelNode } }
+          : base
+      }),
+    [allAnimatedNodes, visibleIds, editMode, pendingNodeId, handleCommitName, handleCancelNode],
+  )
+
+  const onEdgeClick: EdgeMouseHandler = useCallback((_event, edge) => {
+    const rel = snapshot.relationships.find(r => r.id === edge.id) ?? null
+    onSelectRelationship?.(rel)
+  }, [snapshot.relationships, onSelectRelationship])
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
-    // Apply all position changes directly — drag must update every pointer-move
-    // frame without any animation lag.
+    // Apply position changes to the full node set so dragged positions survive
+    // even when a node is temporarily hidden by the timeline.
     setAnimatedNodes(prev => applyNodeChanges(changes, prev) as Node[])
 
-    // On drag end, persist the final position so it survives chapter changes
-    // and page reloads. Write to both the in-memory map and localStorage.
     changes.forEach(change => {
       if (change.type === 'position' && change.dragging === false && change.position) {
         const { id, position } = change
@@ -153,59 +331,90 @@ const GraphCanvas = memo(({ snapshot, selectedCharacterId, showDeceased, onSelec
     })
   }, [setAnimatedNodes])
 
-  const hasFitRef = useRef(false)
-  const handleInit = useCallback((instance: { fitView: (opts?: object) => void }) => {
-    if (hasFitRef.current) return
-    hasFitRef.current = true
-    setTimeout(() => instance.fitView({ padding: 0.2, duration: 300 }), 550)
-  }, [])
+  // fitViewRef is populated by FitViewTrigger (which lives inside the ReactFlow
+  // provider) and gives us reliable access to fitView without onInit gymnastics.
+  const fitViewRef = useRef<(() => void) | null>(null)
+
+  // Auto-layout: clear saved positions and re-run on the full graph, then fit.
+  const handleAutoLayout = useCallback(() => {
+    savedPositionsRef.current = new Map()
+    try {
+      localStorage.removeItem(`litree:positions:${seriesId}`)
+    } catch { /* ignore */ }
+    prevStructureKeyRef.current = ''
+    const laid = applyLayout(layoutRawNodes, layoutEdges)
+    for (const n of laid) {
+      savedPositionsRef.current.set(n.id, n.position)
+    }
+    setLayoutNodes(laid)
+    setTimeout(() => fitViewRef.current?.(), 600)
+  }, [layoutRawNodes, layoutEdges, seriesId])
 
   const onNodeClick: NodeMouseHandler = useCallback((_event, node) => {
+    // Don't select while the node is waiting for a name to be committed.
+    if (node.id === pendingNodeId) return
     if (node.id === selectedCharacterId) {
       onSelectCharacter(null)
     } else {
       const character = characters.find(c => c.id === node.id) ?? null
       onSelectCharacter(character)
     }
-  }, [characters, selectedCharacterId, onSelectCharacter])
+  }, [characters, selectedCharacterId, onSelectCharacter, pendingNodeId])
 
   const onPaneClick = useCallback(() => {
     onSelectCharacter(null)
     if (menuOpen) onCloseMenu()
   }, [onSelectCharacter, onCloseMenu, menuOpen])
 
+  const handleNodeContextMenu: NodeMouseHandler = useCallback((event, node) => {
+    event.preventDefault()
+    onNodeContextMenu?.(node.id, { x: event.clientX, y: event.clientY })
+  }, [onNodeContextMenu])
+
   return (
     <ReactFlow
       nodes={animatedNodes}
-      edges={edges}
+      edges={visibleEdges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       onNodesChange={handleNodesChange}
-      onInit={handleInit}
       onNodeClick={onNodeClick}
       onPaneClick={onPaneClick}
+      onEdgeClick={onSelectRelationship ? onEdgeClick : undefined}
+      onNodeContextMenu={onNodeContextMenu ? handleNodeContextMenu : undefined}
+      onConnect={editMode ? onConnect : undefined}
+      onEdgesDelete={editMode ? onEdgesDelete : undefined}
+      deleteKeyCode={editMode ? 'Delete' : null}
       nodesDraggable
-      minZoom={0.3}
+      minZoom={0.1}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
     >
-      <Background color="#2a2d3a" gap={24} size={1} />
-      {!menuOpen && (
-        <Panel position="top-left">
-          <div className="rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
-            <button
-              onClick={onToggleMenu}
-              aria-label="Open menu"
-              className="w-11 h-11 flex flex-col items-center justify-center gap-[4px] text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
-            >
-              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
-              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
-              <span className="block w-[15px] h-[1.4px] bg-current rounded-full" />
-            </button>
-          </div>
-        </Panel>
+      <FitViewTrigger fitViewRef={fitViewRef} nodeCount={animatedNodes.length} />
+      {addNodeTrigger !== undefined && onAddCharacter && (
+        <AddNodeHandler
+          trigger={addNodeTrigger}
+          seriesId={snapshot.series.id}
+          atUnit={atUnit}
+          savedPositionsRef={savedPositionsRef}
+          onAddCharacter={handleNodeCreated}
+        />
       )}
-      <ZoomControls />
+      <Background color="#2a2d3a" gap={24} size={1} />
+      <ZoomControls onAutoLayout={handleAutoLayout} />
+      {editMode && animatedNodes.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="flex flex-col items-center gap-2 select-none">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none" aria-hidden="true" className="text-white/15">
+              <circle cx="16" cy="16" r="13" stroke="currentColor" strokeWidth="1.5" strokeDasharray="4 3" />
+              <path d="M16 10v12M10 16h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <p className="text-white/30 text-sm">
+              Click <span className="text-white/50 font-medium">New Node</span> to add your first character
+            </p>
+          </div>
+        </div>
+      )}
     </ReactFlow>
   )
 })

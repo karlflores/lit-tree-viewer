@@ -1,0 +1,7 @@
+-- Migration 006 down is intentionally a no-op.
+--
+-- The backfilled ltg_identifiers and synthetic blocks cannot be safely
+-- distinguished from ones created by real LTG imports after this migration
+-- runs, so we leave them in place.
+--
+-- If you need to fully reset to pre-006 state, recreate the database from scratch.

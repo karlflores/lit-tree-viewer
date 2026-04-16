@@ -4,12 +4,48 @@
 
 export type MediaType = 'book' | 'show' | 'film'
 
+/**
+ * One organisational group (arc / volume / season) spanning a range of blocks.
+ * `range` is inclusive: [firstBlockIndex, lastBlockIndex].
+ */
+export type BlockGroup = Readonly<{
+  label: string
+  range: readonly [number, number]
+}>
+
 export type Series = Readonly<{
   id: string
   title: string
   mediaType: MediaType
   unitLabel: string
   totalUnits: number
+  // Optional metadata fields — sourced from LTG `metadata` / `set` directives
+  author?: string
+  groupType?: string
+  // Arbitrary key-value metadata tags (LTG: `metadata <key>: "<value>"`)
+  customMetadata?: Readonly<Record<string, string>>
+  // Block display labels, e.g. { 3: "The Storm" }  →  `new chapter: "The Storm"`
+  blockLabels?: Readonly<Record<number, string>>
+  // Ordered group containers, e.g. [{ label: "Volume I", range: [2, 8] }]
+  blockGroups?: readonly BlockGroup[]
+  published?: boolean
+}>
+
+// Lightweight summary returned by GET /api/series/search
+export type SeriesSummary = Readonly<{
+  id: string
+  title: string
+  mediaType: MediaType
+  unitLabel: string
+  totalUnits: number
+  author?: string
+  published: boolean
+  characterCount: number
+}>
+
+export type SearchResult = Readonly<{
+  results: readonly SeriesSummary[]
+  total: number
 }>
 
 // ============================================================
@@ -88,6 +124,7 @@ export type GraphSnapshot = Readonly<{
   characters: readonly Character[]
   relationships: readonly Relationship[]
   atUnit: number
+  colours?: Readonly<Record<string, string>>
 }>
 
 // ============================================================

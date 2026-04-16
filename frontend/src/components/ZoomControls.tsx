@@ -29,7 +29,11 @@ const findLargestSubgraphIds = (nodes: readonly Node[], edges: readonly Edge[]):
   return new Set(largest)
 }
 
-const ZoomControls = () => {
+type Props = {
+  onAutoLayout?: () => void
+}
+
+const ZoomControls = ({ onAutoLayout }: Props) => {
   const { zoomIn, zoomOut, setCenter, getZoom } = useReactFlow()
   const nodes = useNodes()
   const edges = useEdges()
@@ -61,12 +65,33 @@ const ZoomControls = () => {
     <Panel position="top-right">
       <div className="flex flex-col gap-2 items-stretch">
 
+        {/* Auto-layout */}
+        {onAutoLayout && (
+          <div className="flex flex-col rounded-full border border-border bg-panel shadow-lg overflow-hidden">
+            <button
+              onClick={onAutoLayout}
+              disabled={nodes.length === 0}
+              aria-label="Auto layout"
+              title="Auto layout"
+              className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              {/* Grid/auto-fit icon */}
+              <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+                <rect x="1"   y="1"   width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="9"   y="1"   width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="1"   y="9"   width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="9"   y="9"   width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* Center on largest subgraph */}
-        <div className="flex flex-col rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
+        <div className="flex flex-col rounded-full border border-border bg-panel shadow-lg overflow-hidden">
           <button
             onClick={handleCenterLargest}
             aria-label="Center on largest group"
-            className="w-11 h-11 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
+            className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
           >
             <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
               <circle cx="7.5" cy="7.5" r="2.5" stroke="currentColor" strokeWidth="1.4" />
@@ -79,21 +104,21 @@ const ZoomControls = () => {
         </div>
 
         {/* Zoom in / out */}
-        <div className="flex flex-col rounded-3xl border border-border bg-panel shadow-xl overflow-hidden">
+        <div className="flex flex-col rounded-full border border-border bg-panel shadow-lg overflow-hidden">
           <button
             onClick={() => zoomIn({ duration: 200 })}
             aria-label="Zoom in"
-            className="w-11 h-11 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
+            className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
           >
             <span className="text-xl font-thin leading-none select-none">+</span>
           </button>
 
-          <div className="h-px bg-border mx-2.5" />
+          <div className="h-px bg-border mx-2" />
 
           <button
             onClick={() => zoomOut({ duration: 200 })}
             aria-label="Zoom out"
-            className="w-11 h-11 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
+            className="w-10 h-10 flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 active:bg-white/20 transition-colors"
           >
             <span className="text-xl font-thin leading-none select-none">−</span>
           </button>

@@ -36,7 +36,7 @@ describe('TimelineScrubber', () => {
     // Dots are small divs inside the track; the cursor is also a div, so we count
     // non-null items by checking how many chapter positions are rendered.
     // The component conditionally returns null for the previewUnit, so 9 divs for dots + 2 structural divs (track line + cursor).
-    const trackArea = container.querySelector('[style*="height: 28px"]')
+    const trackArea = container.querySelector('.cursor-pointer')
     expect(trackArea).toBeInTheDocument()
   })
 
@@ -52,7 +52,7 @@ describe('TimelineScrubber', () => {
     const { container } = render(
       <TimelineScrubber series={series} currentUnit={1} onChange={onChange} />,
     )
-    const track = container.querySelector('[style*="height: 28px"]') as HTMLElement
+    const track = container.querySelector('.cursor-pointer') as HTMLElement
     expect(() => {
       track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 0 }))
       track.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: 50 }))
@@ -66,5 +66,27 @@ describe('TimelineScrubber', () => {
   it('shows the correct unit label text in the floating label', () => {
     render(<TimelineScrubber series={series} currentUnit={7} onChange={() => {}} />)
     expect(screen.getByText('7')).toBeInTheDocument()
+  })
+
+  it('handles totalUnits: 1 — both nav buttons disabled, no crash on pointer events', () => {
+    const singleSeries: Series = { ...series, totalUnits: 1 }
+    const onChange = vi.fn()
+    const { container } = render(
+      <TimelineScrubber series={singleSeries} currentUnit={1} onChange={onChange} />,
+    )
+
+    const buttons = screen.getAllByRole('button')
+    expect(buttons[0]).toBeDisabled()
+    expect(buttons[1]).toBeDisabled()
+
+    // Pointer events on the track should be ignored (singleUnit guard)
+    const track = container.querySelector('.cursor-pointer') as HTMLElement
+    expect(() => {
+      track.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 100 }))
+      track.dispatchEvent(new PointerEvent('pointerup',   { bubbles: true }))
+    }).not.toThrow()
+
+    // onChange should never be called — there's nothing to scrub to
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
